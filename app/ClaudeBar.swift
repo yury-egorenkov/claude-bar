@@ -55,6 +55,7 @@ struct ModelView: Decodable, Identifiable {
     var name = ""
     var left: Double = 0
     var resetsAt: Int64 = 0
+    var days: [DayView] = []
     var id: String { name }
 }
 
@@ -328,13 +329,10 @@ struct Limits: View {
                 .kerning(0.4)
                 .foregroundStyle(.secondary)
 
+            // Weekly limits: a title line and the 7-day strip instead of a bar.
             VStack(alignment: .leading, spacing: 8) {
-                LimitRow(title: "Weekly · all models", left: snap.week.left, resetsAt: snap.week.resetsAt,
-                         evenLeft: snap.week.evenLeft, color: snap.week.level.color)
-                if snap.days.count == 7 {
-                    DayStrip(days: snap.days)
-                        .padding(.top, 2)
-                }
+                WeeklyLimit(title: "Weekly · all models", left: snap.week.left, resetsAt: snap.week.resetsAt,
+                            days: snap.days, color: snap.week.level.color)
                 if let forecast {
                     Text(forecast)
                         .font(.system(size: 12, weight: .medium))
@@ -347,7 +345,8 @@ struct Limits: View {
             }
 
             ForEach(snap.models) { model in
-                LimitRow(title: "Weekly · \(model.name)", left: model.left, resetsAt: model.resetsAt, color: .accentColor)
+                WeeklyLimit(title: "Weekly · \(model.name)", left: model.left, resetsAt: model.resetsAt,
+                            days: model.days, color: .accentColor)
             }
 
             if snap.fiveHour.has {
@@ -376,8 +375,8 @@ struct Limits: View {
 }
 
 // Seven cells, one per day of the weekly window. Like the limit bars, a cell shows what
-// is LEFT of the day's budget (100/7 % of the week), as a fill emptying from the right and
-// as a number inside. Over budget: empty on orange, over twice the budget red. Future: 100%.
+// is LEFT of the day's budget (100/7 % of the week), as a fill at the right end that the
+// spent part pushes from the left, and as a number inside. Over budget: empty on orange, over twice the budget red. Future: 100%.
 struct DayStrip: View {
     var days: [DayView]
 
@@ -417,6 +416,7 @@ struct DayCell: View {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.accentColor)
                         .frame(width: fill)
+                        .offset(x: geo.size.width - fill)
                     // The number sits across the fill edge: white over the fill,
                     // regular text over the empty part.
                     text
@@ -425,7 +425,7 @@ struct DayCell: View {
                     text
                         .foregroundStyle(.white)
                         .frame(width: geo.size.width)
-                        .mask(alignment: .leading) { Rectangle().frame(width: fill) }
+                        .mask(alignment: .trailing) { Rectangle().frame(width: fill) }
                 }
             }
             .frame(height: 16)
@@ -439,7 +439,46 @@ struct DayCell: View {
     }
 }
 
-// Title, "% left · Resets 6d", a thin bar; for the week also a tick at the even pace.
+// Title and "% left · Resets 6d".
+struct LimitTitle: View {
+    var title: String
+    var left: Double
+    var resetsAt: Int64
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.system(size: 14))
+            Spacer()
+            Text("\(percent(left)) left · Resets \(short(resetsAt))")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .help("Resets \(when(resetsAt))")
+    }
+}
+
+// A weekly limit: title line, then the 7-day strip; a plain bar until the days arrive.
+struct WeeklyLimit: View {
+    var title: String
+    var left: Double
+    var resetsAt: Int64
+    var days: [DayView]
+    var color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LimitTitle(title: title, left: left, resetsAt: resetsAt)
+            if days.count == 7 {
+                DayStrip(days: days)
+            } else {
+                UsageBar(left: left, evenLeft: nil, color: color)
+            }
+        }
+    }
+}
+
+// Title line and a thin bar (the 5-hour window).
 struct LimitRow: View {
     var title: String
     var left: Double
@@ -449,22 +488,15 @@ struct LimitRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.system(size: 14))
-                Spacer()
-                Text("\(percent(left)) left · Resets \(short(resetsAt))")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
+            LimitTitle(title: title, left: left, resetsAt: resetsAt)
             UsageBar(left: left, evenLeft: evenLeft, color: color)
         }
-        .help("Resets \(when(resetsAt))")
     }
 }
 
-// Track with the % left filled. The tick marks what would be left at an even pace:
-// a fill shorter than the tick means spending ahead of pace.
+// Track with the % left filled at the right end; the spent part grows from the left.
+// The tick marks where the spent part would be at an even pace: past the tick means
+// spending ahead of pace.
 struct UsageBar: View {
     var left: Double
     var evenLeft: Double?
@@ -473,18 +505,21 @@ struct UsageBar: View {
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
-            let fill = width * min(max(left, 0), 100) / 100
+            let fill = left > 0 ? max(width * min(max(left, 0), 100) / 100, 6) : 0
 
             // Every layer has an explicit height: the taller tick must not stretch the bar.
+            // What is left sits at the right end; the spent part grows from the left.
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.primary.opacity(0.1))
                     .frame(height: 6)
                 Capsule()
                     .fill(color)
-                    .frame(width: left > 0 ? max(fill, 6) : 0, height: 6)
+                    .frame(width: fill, height: 6)
+                    .offset(x: width - fill)
                 if let evenLeft {
-                    let tick = width * min(max(evenLeft, 0), 100) / 100
+                    // Where the spent part would end at an even pace.
+                    let tick = width * (1 - min(max(evenLeft, 0), 100) / 100)
                     Capsule()
                         .fill(Color.primary.opacity(0.55))
                         .frame(width: 2, height: 12)

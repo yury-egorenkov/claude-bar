@@ -202,10 +202,11 @@ func TestWeekDays(t *testing.T) {
 		at(47, 23), // day 1, last sample
 		// day 2: the Mac was off, no samples
 		at(75, 30), // day 3
-		{At: start.Add(time.Hour).Unix(), Used: 99, ResetsAt: 1}, // another window: ignored
+		{At: start.Add(time.Hour).Unix(), Used: 99, ResetsAt: 1},                                // another window: ignored
+		{At: start.Add(time.Hour).Unix(), Limit: "Fable", Used: 50, ResetsAt: testReset.Unix()}, // another limit: ignored
 	}
 	now := start.Add(76 * time.Hour) // day 3, 04:00 into it
-	days := WeekDays(history, testWeek(31), now)
+	days := WeekDays(history, "", testWeek(31), now)
 
 	gtest.Eq(len(days), 7)
 	gtest.Eq(days[0], DayView{Start: start.Unix(), State: DayPast, Spent: 14, Known: true})
@@ -217,14 +218,14 @@ func TestWeekDays(t *testing.T) {
 
 	// History starting mid-week: earlier days are unknown.
 	late := []Sample{at(50, 23)}
-	days = WeekDays(late, testWeek(31), now)
+	days = WeekDays(late, "", testWeek(31), now)
 	gtest.Eq(days[0].Known, false)
 	gtest.Eq(days[1].Known, false)
 	// The first sample is inside day 2: its start is not covered either.
 	gtest.Eq(days[2].Known, false)
 	gtest.Eq(days[3], DayView{Start: start.Add(3 * Day).Unix(), State: DayToday, Spent: 8, Known: true})
 
-	gtest.Equal(WeekDays(history, Window{}, now), []DayView{})
+	gtest.Equal(WeekDays(history, "", Window{}, now), []DayView{})
 }
 
 func TestAppendHistory(t *testing.T) {
@@ -232,12 +233,16 @@ func TestAppendHistory(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "sub", "history.jsonl")
 	now := testAt(0.5)
-	AppendHistory(path, Sample{At: now.Add(-9 * Day).Unix(), Used: 1}, now.Add(-9*Day))
-	AppendHistory(path, Sample{At: now.Add(-time.Hour).Unix(), Used: 40}, now.Add(-time.Hour))
-	AppendHistory(path, Sample{At: now.Unix(), Used: 41}, now)
+	AppendHistory(path, now.Add(-9*Day), Sample{At: now.Add(-9 * Day).Unix(), Used: 1})
+	AppendHistory(path, now.Add(-time.Hour), Sample{At: now.Add(-time.Hour).Unix(), Used: 40})
+	AppendHistory(path, now, Sample{At: now.Unix(), Used: 41}, Sample{At: now.Unix(), Limit: "Fable", Used: 3})
 
 	// The 9-day-old sample is dropped.
-	gtest.Equal(ReadHistory(path), []Sample{{At: now.Add(-time.Hour).Unix(), Used: 40}, {At: now.Unix(), Used: 41}})
+	gtest.Equal(ReadHistory(path), []Sample{
+		{At: now.Add(-time.Hour).Unix(), Used: 40},
+		{At: now.Unix(), Used: 41},
+		{At: now.Unix(), Limit: "Fable", Used: 3},
+	})
 }
 
 func TestWeekPace_earlyBurst(t *testing.T) {
@@ -252,4 +257,18 @@ func TestWeekPace_earlyBurst(t *testing.T) {
 	pace = WeekPace(testWeek(20), testReset.Add(-Week).Add(3*time.Hour))
 	gtest.Eq(pace.Level, LevelBad)
 	gtest.Eq(pace.RunOut, testReset.Add(-Week).Add(99*time.Hour))
+}
+
+func TestWeekDays_model(t *testing.T) {
+	defer gtest.Catch(t)
+
+	start := testReset.Add(-Week)
+	history := []Sample{
+		{At: start.Add(10 * time.Hour).Unix(), Used: 30, ResetsAt: testReset.Unix()},
+		{At: start.Add(10 * time.Hour).Unix(), Limit: "Fable", Used: 4, ResetsAt: testReset.Unix()},
+	}
+	now := start.Add(30 * time.Hour)
+	days := WeekDays(history, "Fable", Window{Used: 6, ResetsAt: testReset.Unix()}, now)
+	gtest.Eq(days[0].Spent, 4.0)
+	gtest.Eq(days[1].Spent, 2.0)
 }

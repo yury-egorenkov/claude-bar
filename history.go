@@ -10,8 +10,9 @@ import (
 	"github.com/mitranim/gg"
 )
 
-// Weekly usage over time, for the per-day strip. The API reports only the current
-// percentage, so every successful fetch adds a sample here (every 2 min or less).
+// Weekly usage over time, for the per-day strips. The API reports only the current
+// percentages, so every successful fetch adds samples here (every 2 min or less):
+// one for all models and one per model limit (e.g. Fable).
 
 const (
 	Day = 24 * time.Hour
@@ -20,9 +21,10 @@ const (
 )
 
 type Sample struct {
-	At       int64   `json:"at"`        // epoch seconds
-	Used     float64 `json:"used"`      // weekly % used at that moment
-	ResetsAt int64   `json:"resets_at"` // identifies the weekly window
+	At       int64   `json:"at"`              // epoch seconds
+	Limit    string  `json:"limit,omitempty"` // model name; empty: all models
+	Used     float64 `json:"used"`            // weekly % used at that moment
+	ResetsAt int64   `json:"resets_at"`       // identifies the weekly window
 }
 
 func HistoryPath() string { return filepath.Join(ConfigDir(), "history.jsonl") }
@@ -45,8 +47,8 @@ func ReadHistory(path string) []Sample {
 	return out
 }
 
-// Rewrites the file through a temp file: old samples dropped, the new one appended.
-func AppendHistory(path string, sample Sample, now time.Time) {
+// Rewrites the file through a temp file: old samples dropped, the new ones appended.
+func AppendHistory(path string, now time.Time, add ...Sample) {
 	var buf bytes.Buffer
 	for _, old := range ReadHistory(path) {
 		if now.Sub(time.Unix(old.At, 0)) < historyKeep {
@@ -54,8 +56,10 @@ func AppendHistory(path string, sample Sample, now time.Time) {
 			buf.WriteByte('\n')
 		}
 	}
-	buf.Write(gg.JsonBytes(sample))
-	buf.WriteByte('\n')
+	for _, sample := range add {
+		buf.Write(gg.JsonBytes(sample))
+		buf.WriteByte('\n')
+	}
 
 	gg.Try(os.MkdirAll(filepath.Dir(path), 0o700))
 	tmp := path + ".tmp"
@@ -84,8 +88,9 @@ type DayView struct {
 	Known bool     `json:"known"` // false: no samples cover the day (before the first sample)
 }
 
+// Days of one weekly limit: `limit` is a model name, empty for all models.
 // The current moment counts as a sample, so today is up to date even between fetches.
-func WeekDays(history []Sample, week Window, now time.Time) []DayView {
+func WeekDays(history []Sample, limit string, week Window, now time.Time) []DayView {
 	if !week.Live(now) {
 		return []DayView{}
 	}
@@ -93,11 +98,11 @@ func WeekDays(history []Sample, week Window, now time.Time) []DayView {
 
 	var samples []Sample
 	for _, sample := range history {
-		if sample.ResetsAt == week.ResetsAt && sample.At <= now.Unix() {
+		if sample.Limit == limit && sample.ResetsAt == week.ResetsAt && sample.At <= now.Unix() {
 			samples = append(samples, sample)
 		}
 	}
-	samples = append(samples, Sample{At: now.Unix(), Used: week.Used, ResetsAt: week.ResetsAt})
+	samples = append(samples, Sample{At: now.Unix(), Limit: limit, Used: week.Used, ResetsAt: week.ResetsAt})
 
 	out := make([]DayView, 7)
 	for ind := range out {

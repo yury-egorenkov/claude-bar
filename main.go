@@ -144,7 +144,11 @@ func runJson(now time.Time) Snapshot {
 	}
 
 	snap := MakeSnapshot(state, AnyConnected(dirs) || !usage.CapturedAt.IsZero(), now)
-	snap.Days = WeekDays(ReadHistory(HistoryPath()), state.Limits.SevenDay, now)
+	history := ReadHistory(HistoryPath())
+	snap.Days = WeekDays(history, "", state.Limits.SevenDay, now)
+	for ind, model := range snap.Models {
+		snap.Models[ind].Days = WeekDays(history, model.Name, model.Window(), now)
+	}
 	snap.Error = ReadUsageErr()
 	if fetchErr != nil {
 		snap.Error = fetchErr.Error()

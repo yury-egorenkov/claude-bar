@@ -78,9 +78,14 @@ func RunFetch() {
 		state := FetchUsage(ReadToken(ClaudeDirs(), now))
 		state.CapturedAt = now
 		WriteState(UsagePath(), state)
+		var samples []Sample
 		if week := state.Limits.SevenDay; week.Has() {
-			AppendHistory(HistoryPath(), Sample{At: now.Unix(), Used: week.Used, ResetsAt: week.ResetsAt}, now)
+			samples = append(samples, Sample{At: now.Unix(), Used: week.Used, ResetsAt: week.ResetsAt})
 		}
+		for _, model := range state.Models {
+			samples = append(samples, Sample{At: now.Unix(), Limit: model.Name, Used: model.Window.Used, ResetsAt: model.Window.ResetsAt})
+		}
+		AppendHistory(HistoryPath(), now, samples...)
 	})
 	if err != nil {
 		gg.Try(os.WriteFile(UsageErrPath(), []byte(err.Error()), 0o600))

@@ -30,15 +30,15 @@ Updated just now
 ────────────────────────────────────────────
 PLAN USAGE LIMITS
 Weekly · all models         62% left · Resets 3d
-[██████████████░░░░░|░░░░░░░░░]                  tick = even pace
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
-[ 0% ] [37% ] [ 0% ] [79% ] [100%] [100%] [100%]  day's budget left, as fill and number
+[ 0% ] [37% ] [ 0% ] [79% ] [100%] [100%] [100%]  day's budget left, fill and number
 Runs out Fri 18:20 at this pace                   (only when it does)
 Today 3% of 14% · 15% a day for 4 days
 Weekly · Fable             100% left · Resets 3d
-[████████████████████████]
+ Sat    Sun    Mon    Tue    Wed    Thu    Fri
+[100%] [100%] [100%] [100%] [100%] [100%] [100%]
 5-hour session              76% left · Resets 2h
-[██████████████████░░░░░░]
+[░░░░░░██████████████████]
 ────────────────────────────────────────────
 Refresh
 ✓ Start at Login
@@ -46,13 +46,13 @@ ClaudeBar by egorsky.com
 Quit ClaudeBar
 ```
 
-Bars show what is left and empty from the right. The tick on the weekly bar marks what would be left at an even pace: a fill shorter than the tick means you are ahead of pace.
+Weekly limits (all models and each model) show a 7-day strip instead of a bar; the 5-hour window keeps a bar. Both show what is left at the right end; the spent part grows from the left, like time through the week.
 
 ### Days
 
-The week is split into 7 days of 24 hours counted from the reset time (a reset at 14:00 means days run from 14:00 to 14:00), so every day has the same budget: 100/7 ≈ 14% of the week. Like the bars, a cell shows what is left: it starts full and empties from the right as that day's spend grows. Future days are full. Over budget, the cell is empty on an orange background; over twice the budget, red. The number inside a cell is the % of that day's budget left; today is outlined; `–` means there is no data for that day. Hover a cell for that day's spend.
+The week is split into 7 days of 24 hours counted from the reset time (a reset at 14:00 means days run from 14:00 to 14:00), so every day has the same budget: 100/7 ≈ 14% of the week. Like the bars, a cell shows what is left: it starts full, and the spent part grows from the left as that day's spend grows. Future days are full. Over budget, the cell is empty on an orange background; over twice the budget, red. The number inside a cell is the % of that day's budget left; today is outlined; `–` means there is no data for that day. Hover a cell for that day's spend.
 
-The usage API reports only the current percentage, so every fetch appends `{at, used, resets_at}` to `~/.config/claudebar/history.jsonl` (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
+The usage API reports only the current percentage, so every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
 
 ## How it works
 

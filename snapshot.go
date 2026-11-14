@@ -20,10 +20,13 @@ type Snapshot struct {
 }
 
 type ModelView struct {
-	Name     string  `json:"name"`
-	Left     float64 `json:"left"`
-	ResetsAt int64   `json:"resets_at"`
+	Name     string    `json:"name"`
+	Left     float64   `json:"left"`
+	ResetsAt int64     `json:"resets_at"`
+	Days     []DayView `json:"days"` // the 7 days of this model's weekly window
 }
+
+func (self ModelView) Window() Window { return Window{Used: 100 - self.Left, ResetsAt: self.ResetsAt} }
 
 // One limit window. All percentages are what is LEFT, 0–100.
 type View struct {
@@ -54,7 +57,7 @@ func MakeSnapshot(state State, connected bool, now time.Time) Snapshot {
 	out.Days = []DayView{}
 	for _, model := range state.Models {
 		if model.Window.Live(now) {
-			out.Models = append(out.Models, ModelView{Name: model.Name, Left: math.Max(0, 100-model.Window.Used), ResetsAt: model.Window.ResetsAt})
+			out.Models = append(out.Models, ModelView{Name: model.Name, Left: math.Max(0, 100-model.Window.Used), ResetsAt: model.Window.ResetsAt, Days: []DayView{}})
 		}
 	}
 	out.FiveHour.Level = FiveHourLevel(lim.FiveHour, now)
