@@ -59,17 +59,20 @@ struct ModelView: Decodable, Identifiable {
     var id: String { name }
 }
 
-// One day of the weekly window (24 h from the reset time); state: past, today, future.
+// One calendar day of the weekly window; state: past, today, future. The first and the
+// last day are cut by the reset time, so the budget is each day's share of the week.
 struct DayView: Decodable, Identifiable {
     var start: Int64 = 0
+    var end: Int64 = 0
     var state = "future"
+    var budget: Double = 0
+    var left: Double = 0
+    var timeLeft: Double = 0
+    var ahead = false
     var spent: Double = 0
     var known = false
     var id: Int64 { start }
 }
-
-// Even spend: the same share of the week every day.
-let dayBudget = 100.0 / 7
 
 struct Snapshot: Decodable {
     var connected = true
@@ -359,8 +362,8 @@ struct Limits: View {
     private var forecast: String? {
         let week = snap.week
         if week.left <= 0 { return "Used up until the reset" }
-        if week.runOutAt == 0 { return nil }
-        return "Runs out \(when(week.runOutAt)) at this pace"
+        if week.runOutAt == 0 || !week.level.alarming { return nil }
+        return "Runs out \(when(week.runOutAt)) even at the daily budget"
     }
 
     // "Today 3% of 14% · 15% a day for 4 days"
@@ -370,13 +373,14 @@ struct Limits: View {
         let daysLeft = max(1, Int((secs / 86400).rounded(.up)))
         let budget = "\(percent(week.perDay)) a day for \(daysLeft) \(daysLeft == 1 ? "day" : "days")"
         guard let today = snap.days.first(where: { $0.state == "today" }), today.known else { return budget }
-        return "Today \(percent(today.spent)) of \(percent(dayBudget)) · \(budget)"
+        return "Today \(percent(today.spent)) of \(percent(today.budget)) · \(budget)"
     }
 }
 
-// Seven cells, one per day of the weekly window. Like the limit bars, a cell shows what
-// is LEFT of the day's budget (100/7 % of the week), as a fill at the right end that the
-// spent part pushes from the left, and as a number inside. Over budget: empty on orange, over twice the budget red. Future: 100%.
+// One cell per calendar day of the weekly window (8 when the reset is not at midnight).
+// Blue is tokens: the week's budget laid over the days, consumed from the first day on,
+// whatever the date; the number is the % of that day's budget left. Green is the clock:
+// the time left of that day. Usage ahead of time turns the spent part orange.
 struct DayStrip: View {
     var days: [DayView]
 
@@ -394,13 +398,11 @@ struct DayCell: View {
 
     var body: some View {
         let today = day.state == "today"
-        let spent = day.known ? day.spent / dayBudget : 0
-        let left = day.known || day.state == "future" ? max(0, 1 - spent) : 0
-        let track: Color = spent > 2 ? Color(nsColor: .systemRed).opacity(0.55)
-            : spent > 1 ? Color(nsColor: .systemOrange).opacity(0.55)
-            : Color.primary.opacity(0.08)
-        // % of the day's budget left, inside the cell; "–" without data.
-        let label = day.known || day.state == "future" ? percent(left * 100) : "–"
+        let left = min(max(day.left, 0), 1)
+        // Usage ate into this day ahead of its time: the spent part turns orange.
+        let track: Color = day.ahead ? Color(nsColor: .systemOrange).opacity(0.6) : Color.primary.opacity(0.08)
+        // % of the day's budget left, inside the cell.
+        let label = percent(left * 100)
 
         VStack(spacing: 3) {
             Text(weekday(day.start))
@@ -433,9 +435,23 @@ struct DayCell: View {
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(Color.primary.opacity(today ? 0.45 : 0), lineWidth: 1)
             )
+            // Time left of the day, like the budget above: at the right end, the past
+            // grows from the left. Blue shorter than green: spending faster than time.
+            GeometryReader { geo in
+                let width = geo.size.width * min(max(day.timeLeft, 0), 1)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.06))
+                    Capsule()
+                        .fill(Color(nsColor: .systemGreen))
+                        .frame(width: width)
+                        .offset(x: geo.size.width - width)
+                }
+            }
+            .frame(height: 3)
         }
         .frame(maxWidth: .infinity)
-        .help(day.known ? "\(percent(day.spent)) of the week spent this day, budget \(percent(dayBudget))" : (day.state == "future" ? "Budget \(percent(dayBudget)) of the week" : "No data for this day"))
+        .help("Budget \(percent(day.budget)) of the week, \(percent(left * 100)) of it left" + (day.known ? " · \(percent(day.spent)) spent on this day" : ""))
     }
 }
 
@@ -469,7 +485,7 @@ struct WeeklyLimit: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LimitTitle(title: title, left: left, resetsAt: resetsAt)
-            if days.count == 7 {
+            if !days.isEmpty {
                 DayStrip(days: days)
             } else {
                 UsageBar(left: left, evenLeft: nil, color: color)

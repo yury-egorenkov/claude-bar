@@ -108,3 +108,70 @@ func mergeWindow(prev, next Window, now time.Time) Window {
 	}
 	return Window{}
 }
+
+// The status line and the usage API may disagree by a point (rounding, a reply not
+// sent yet). Taking the freshest made the badge jump back and forth between them.
+// Within one window usage only grows, so the larger value is the current one; a window
+// with a later reset is a newer window and wins outright. Per-model limits come only
+// from the API.
+func CombineStates(line, api State) State {
+	return State{
+		Limits: Limits{
+			FiveHour: combineWindow(line.Limits.FiveHour, api.Limits.FiveHour),
+			SevenDay: combineWindow(line.Limits.SevenDay, api.Limits.SevenDay),
+		},
+		Models:     api.Models,
+		CapturedAt: maxTime(line.CapturedAt, api.CapturedAt),
+	}
+}
+
+func combineWindow(one, two Window) Window {
+	switch {
+	case one.ResetsAt > two.ResetsAt:
+		return one
+	case two.ResetsAt > one.ResetsAt:
+		return two
+	default:
+		return Window{Used: max(one.Used, two.Used), ResetsAt: one.ResetsAt}
+	}
+}
+
+func maxTime(one, two time.Time) time.Time {
+	if one.After(two) {
+		return one
+	}
+	return two
+}
+
+// The weekly level shown last, for WeekLevel's hysteresis. A new window starts fresh.
+type ShownLevel struct {
+	ResetsAt int64 `json:"resets_at"`
+	Level    Level `json:"level"`
+}
+
+func shownLevelPath() string { return filepath.Join(ConfigDir(), "level.json") }
+
+func ReadShownLevel(resetsAt int64) Level {
+	body, err := os.ReadFile(shownLevelPath())
+	if os.IsNotExist(err) {
+		return LevelUnknown
+	}
+	gg.Try(err)
+	var shown struct {
+		ResetsAt int64  `json:"resets_at"`
+		Level    string `json:"level"`
+	}
+	gg.JsonDecode(body, &shown)
+	if shown.ResetsAt != resetsAt {
+		return LevelUnknown
+	}
+	return ParseLevel(shown.Level)
+}
+
+func WriteShownLevel(resetsAt int64, level Level) {
+	if ReadShownLevel(resetsAt) == level {
+		return
+	}
+	gg.Try(os.MkdirAll(ConfigDir(), 0o700))
+	gg.Try(os.WriteFile(shownLevelPath(), gg.JsonBytes(ShownLevel{ResetsAt: resetsAt, Level: level}), 0o600))
+}

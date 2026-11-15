@@ -134,16 +134,15 @@ func runJson(now time.Time) Snapshot {
 	fetchErr := gg.Catch(func() { FetchIfStale(now) })
 
 	dirs := ClaudeDirs()
-	state := NewestState(dirs)
 	usage := ReadState(UsagePath())
-	if usage.CapturedAt.After(state.CapturedAt) {
-		state = usage
-	} else {
-		// The status line has no per-model limits: take them from the last API result.
-		state.Models = usage.Models
-	}
+	state := CombineStates(NewestState(dirs), usage)
 
 	snap := MakeSnapshot(state, AnyConnected(dirs) || !usage.CapturedAt.IsZero(), now)
+	if snap.Week.Has {
+		snap.Week.Level = WeekLevel(snap.Week.Ahead, snap.Week.Left, ReadShownLevel(snap.Week.ResetsAt))
+		snap.Level = max(snap.Week.Level, snap.FiveHour.Level)
+		WriteShownLevel(snap.Week.ResetsAt, snap.Week.Level)
+	}
 	history := ReadHistory(HistoryPath())
 	snap.Days = WeekDays(history, "", state.Limits.SevenDay, now)
 	for ind, model := range snap.Models {
@@ -159,10 +158,7 @@ func runJson(now time.Time) Snapshot {
 func runShow() {
 	now := time.Now()
 	snap := runJson(now)
-	state := NewestState(ClaudeDirs())
-	if usage := ReadState(UsagePath()); usage.CapturedAt.After(state.CapturedAt) {
-		state = usage
-	}
+	state := CombineStates(NewestState(ClaudeDirs()), ReadState(UsagePath()))
 	if snap.Error != "" {
 		fmt.Println("API:", snap.Error)
 	}

@@ -35,6 +35,7 @@ type View struct {
 	EvenLeft float64 `json:"even_left"` // what would be left at an even pace
 	ResetsAt int64   `json:"resets_at"`
 	RunOutAt int64   `json:"run_out_at"` // 0: lasts until the reset
+	Ahead    float64 `json:"ahead"`      // weekly: day budgets ahead of the schedule
 	PerDay   float64 `json:"per_day"`    // weekly only: % per day to last until the reset
 	Level    Level   `json:"level"`
 }
@@ -78,6 +79,7 @@ func makeView(pace Pace) View {
 		EvenLeft: 100 - pace.Even,
 		ResetsAt: pace.Reset.Unix(),
 		PerDay:   pace.PerDay,
+		Ahead:    pace.Ahead,
 		Level:    pace.Level,
 	}
 	if !pace.RunOut.IsZero() {

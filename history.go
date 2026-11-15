@@ -79,22 +79,37 @@ var dayStateNames = [...]string{"past", "today", "future"}
 
 func (self DayState) MarshalText() ([]byte, error) { return []byte(dayStateNames[self]), nil }
 
-// One day of the weekly window: 24 h counted from the reset time, not from midnight,
-// so every day has the same budget, 100/7 % of the week.
+// One calendar day of the weekly window, midnight to midnight in local time. The first
+// and the last day are cut by the window (a reset at 14:00 makes them 10 h and 14 h long).
+// Every day holds the same budget: 100% split evenly over the days (12.5% for 8 days).
+//
+// Two independent measures per day:
+//   - Left: tokens. The week's budget is laid out over the days in order, and usage
+//     consumes it from the first day on, whatever the date: unspent budget of a past
+//     day stays in that day until usage reaches it.
+//   - TimeLeft: the clock. Share of the day still ahead: 0 for past days, 1 for future.
 type DayView struct {
-	Start int64    `json:"start"` // epoch seconds
-	State DayState `json:"state"`
-	Spent float64  `json:"spent"` // % of the week spent that day
-	Known bool     `json:"known"` // false: no samples cover the day (before the first sample)
+	Start    int64    `json:"start"` // epoch seconds, inside the window
+	End      int64    `json:"end"`
+	State    DayState `json:"state"`
+	Budget   float64  `json:"budget"`    // % of the week this day holds: 100 / number of days
+	Left     float64  `json:"left"`      // share of this day's budget not consumed yet, 0–1
+	TimeLeft float64  `json:"time_left"` // share of the day's time still ahead, 0–1
+	// Usage has consumed more of this day than its time has passed: spending ahead of time.
+	Ahead bool    `json:"ahead"`
+	Spent float64 `json:"spent"` // % of the week actually spent on this calendar day (history)
+	Known bool    `json:"known"` // false: no samples cover the day (before the first sample)
 }
 
 // Days of one weekly limit: `limit` is a model name, empty for all models.
-// The current moment counts as a sample, so today is up to date even between fetches.
+// Calendar days in the location of `now`. The current moment counts as a sample,
+// so today is up to date even between fetches.
 func WeekDays(history []Sample, limit string, week Window, now time.Time) []DayView {
 	if !week.Live(now) {
 		return []DayView{}
 	}
-	start := week.Reset().Add(-Week)
+	loc := now.Location()
+	start := week.Reset().In(loc).Add(-Week)
 
 	var samples []Sample
 	for _, sample := range history {
@@ -104,31 +119,42 @@ func WeekDays(history []Sample, limit string, week Window, now time.Time) []DayV
 	}
 	samples = append(samples, Sample{At: now.Unix(), Limit: limit, Used: week.Used, ResetsAt: week.ResetsAt})
 
-	out := make([]DayView, 7)
-	for ind := range out {
-		begin := start.Add(time.Duration(ind) * Day)
-		end := begin.Add(Day)
-		day := DayView{Start: begin.Unix()}
+	sched := WeekSchedule(week, loc)
+	budget := sched.Budget()
 
+	out := []DayView{}
+	for ind, bound := range sched.Days {
+		begin, end := bound[0], bound[1]
+		day := DayView{Start: begin.Unix(), End: end.Unix(), Budget: budget}
+		// This day's budget spans [ind·budget, (ind+1)·budget] on the week's 0–100 scale.
+		day.Left = clamp01((float64(ind+1)*budget - week.Used) / budget)
+
+		upTo := end
 		switch {
 		case !now.Before(end):
 			day.State = DayPast
 		case !now.Before(begin):
 			day.State = DayToday
-			end = now
+			day.TimeLeft = float64(end.Sub(now)) / float64(end.Sub(begin))
+			upTo = now
 		default:
 			day.State = DayFuture
+			day.TimeLeft = 1
 		}
+
+		// Consumed share against passed share. The margin keeps the color steady while
+		// the clock and usage (whole percents) run neck and neck.
+		day.Ahead = (1 - day.Left) > (1-day.TimeLeft)+AheadMargin
 
 		if day.State != DayFuture {
 			from, okFrom := usedAt(samples, start, begin)
-			to, okTo := usedAt(samples, start, end)
+			to, okTo := usedAt(samples, start, upTo)
 			day.Known = okFrom && okTo
 			if day.Known {
 				day.Spent = max(0, to-from)
 			}
 		}
-		out[ind] = day
+		out = append(out, day)
 	}
 	return out
 }

@@ -4,21 +4,21 @@ A macOS menu bar app that shows how much of your Claude plan usage limits is lef
 
 Made by [egorsky.com](https://egorsky.com). MIT License.
 
-<img src="screenshot.png" width="420" alt="ClaudeBar: the badge in the menu bar and the panel with weekly limits, the 7-day strip and the Fable limit">
+<img src="screenshot.png" width="400" alt="ClaudeBar on budget: outline badge, day cells for all models and for Fable"> <img src="screenshot-ahead.png" width="400" alt="ClaudeBar ahead of budget: orange badge, Ahead of pace pill and the run-out forecast">
 
 ## Menu bar
 
-A rounded rect with the weekly % left inside. Its color shows how early the limit runs out at the current pace:
+A rounded rect with the weekly % left inside. Its color shows how far usage is ahead of the daily budget (the same budget the day cells show: the week split evenly over its calendar days), counted in days:
 
-| Look | Meaning |
-|------|---------|
-| Outline, system color | lasts until the reset |
-| Yellow | runs out up to 1 day before the reset |
-| Orange | more than 1 day before |
-| Red | more than 2 days before, or under 10% left |
+| Look | Ahead of the daily budget |
+|------|---------------------------|
+| Outline, system color | less than 0.15 of a day |
+| Yellow | up to 1 day |
+| Orange | 1 to 2 days |
+| Red | more than 2 days, or under 10% left |
 | `–` | no data yet |
 
-The worse of the weekly and the 5-hour window wins; for the 5-hour window the same rule applies in proportion (1 day of 7 = 43 min of 5 h). There is no forecast until spending is more than 2 pp ahead of an even pace, and the rate is taken over at least one day of the window (43 min for the 5-hour one): 4% in the first 3 hours after a reset is not a weekly rate.
+One day ahead means that even keeping to the daily budget from now on, the limit runs out a day before the reset. To leave a level, the value has to fall 0.1 day below its threshold, so a value sitting on a threshold does not flip the color back and forth. The 5-hour window has its own rule: red or orange when, at the current rate, it runs out before its reset; the worse of the two wins.
 
 ## Panel
 
@@ -30,13 +30,14 @@ Updated just now
 ────────────────────────────────────────────
 PLAN USAGE LIMITS
 Weekly · all models         62% left · Resets 3d
- Sat    Sun    Mon    Tue    Wed    Thu    Fri
-[ 0% ] [37% ] [ 0% ] [79% ] [100%] [100%] [100%]  day's budget left, fill and number
-Runs out Fri 18:20 at this pace                   (only when it does)
+ Sat   Sun   Mon   Tue   Wed   Thu   Fri   Sat
+[ 0%] [ 0%] [ 0%] [96%] [100%][100%][100%][100%]  tokens: budget left per day
+               ▔▔▔▔ ▔▔▔▔ ▔▔▔▔ ▔▔▔▔ ▔▔▔▔  green: time left of the day
+Runs out Fri 18:20 even at the daily budget       (only when ahead)
 Today 3% of 14% · 15% a day for 4 days
 Weekly · Fable             100% left · Resets 3d
- Sat    Sun    Mon    Tue    Wed    Thu    Fri
-[100%] [100%] [100%] [100%] [100%] [100%] [100%]
+ Sat   Sun   Mon   Tue   Wed   Thu   Fri   Sat
+[100%][100%][100%][100%][100%][100%][100%][100%]
 5-hour session              76% left · Resets 2h
 [░░░░░░██████████████████]
 ────────────────────────────────────────────
@@ -50,9 +51,16 @@ Weekly limits (all models and each model) show a 7-day strip instead of a bar; t
 
 ### Days
 
-The week is split into 7 days of 24 hours counted from the reset time (a reset at 14:00 means days run from 14:00 to 14:00), so every day has the same budget: 100/7 ≈ 14% of the week. Like the bars, a cell shows what is left: it starts full, and the spent part grows from the left as that day's spend grows. Future days are full. Over budget, the cell is empty on an orange background; over twice the budget, red. The number inside a cell is the % of that day's budget left; today is outlined; `–` means there is no data for that day. Hover a cell for that day's spend.
+Cells are calendar days, midnight to midnight; today's name is bold and switches at midnight. A week that resets at 14:00 covers 8 days; the first and the last are cut by the reset time (10 h and 14 h). Every day holds the same token budget: 100% split evenly, 12.5% for 8 days.
 
-The usage API reports only the current percentage, so every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
+Each cell has two measures, independent of each other:
+
+- **Blue: tokens.** The week's budget is laid over the days in order, an equal share each, and usage consumes it from the first day on, whatever the date. Unspent budget of a past day stays in that day until usage reaches it. The number inside is the % of that day's budget left. When usage has consumed more of a day than its time has passed (by more than 15% of the day), the spent part of that cell turns orange: you are ahead of time.
+- **Green: the clock.** The thin line under each cell is the time left of that day: empty for past days, shrinking through today, full for future days.
+
+Both keep what is left at the right end. Hover a cell for its budget and that calendar day's actual spend.
+
+The cells need only the current percentage. For the actual spend per calendar day (the hover and the "Today" line) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
 
 ## How it works
 
@@ -62,7 +70,7 @@ usage API (api.anthropic.com) ─┐
 Claude Code status line ───────┘
 ```
 
-Two sources; the freshest wins:
+Two sources. Within one window usage only grows, so where they disagree by a point (rounding, a reply not sent yet) the larger value is used:
 
 1. **Usage API**: the endpoint Claude Code itself calls (`api.anthropic.com/api/oauth/usage`). It returns weekly, per-model and 5-hour limits, including usage from claude.ai. It is asked at most every 2 minutes, in the background. The token is Claude Code's OAuth token, from `.credentials.json` in the Claude config dirs (Claude Code on Linux) or the macOS Keychain (Claude Code on the Mac). It is only read, never refreshed: refreshing rotates the refresh token and would log Claude Code out, so an expired token waits until Claude Code renews it.
 2. **Status line**: the `rate_limits` field that Claude Code passes to the status line command after each reply. No token involved.
