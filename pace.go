@@ -27,34 +27,23 @@ type Limits struct {
 
 type Level int
 
-// By how early the limit runs out at the current pace, measured in parts of the window
-// (for the week: one part = 1 day):
+// By how early the limit runs out, in parts of the window (for the week: one part = 1 day;
+// the week keeps to the daily budget from now, the 5-hour window to its current rate):
 //
 //	ok    lasts until the reset
-//	soon  runs out up to 1/7 of the window before the reset (yellow)
-//	warn  more than 1/7 before (orange)
-//	bad   more than 2/7 before, or under 10% left (red)
+//	soon  runs out before the reset, up to 1/7 of the window early (yellow)
+//	bad   more than 1/7 early, or under 10% left (red)
 const (
 	LevelUnknown Level = iota
 	LevelOk
 	LevelSoon
-	LevelWarn
 	LevelBad
 )
 
-var levelNames = [...]string{"unknown", "ok", "soon", "warn", "bad"}
+var levelNames = [...]string{"unknown", "ok", "soon", "bad"}
 
-// JSON for the app: "unknown", "ok", "soon", "warn", "bad".
+// JSON for the app: "unknown", "ok", "soon", "bad".
 func (self Level) MarshalText() ([]byte, error) { return []byte(levelNames[self]), nil }
-
-func ParseLevel(name string) Level {
-	for ind, known := range levelNames {
-		if known == name {
-			return Level(ind)
-		}
-	}
-	return LevelUnknown
-}
 
 func (self Level) Mark() string {
 	switch self {
@@ -62,8 +51,6 @@ func (self Level) Mark() string {
 		return "🟢"
 	case LevelSoon:
 		return "🟡"
-	case LevelWarn:
-		return "🟠"
 	case LevelBad:
 		return "🔴"
 	default:
@@ -76,10 +63,13 @@ const (
 	FiveHour = 5 * time.Hour
 	// Five-hour window: percentage points above the even pace before any forecast.
 	OverMargin = 2.0
-	// Week: day budgets ahead of the schedule before it counts as ahead.
+	// Week, hours mode: day budgets ahead before it counts (days mode: 0, as soon as
+	// tomorrow's tokens are touched).
 	AheadMargin = 0.15
-	// How much lower the value must fall to leave a level (in day budgets).
-	LevelHysteresis = 0.1
+	// Quiet nights: 00:00 to this hour holds no budget.
+	NightEnd = 9
+	// Day cells: tokens shorter than the clock by more than this share turn orange.
+	CellMargin = 0.15
 	// Under this % left the level is bad whatever the pace.
 	LeftBad = 10.0
 )
@@ -87,9 +77,9 @@ const (
 // Spending pace of the weekly limit.
 type Pace struct {
 	Used  float64 // used, %
-	Even  float64 // what would be used by now at an even pace until the reset, %
+	Even  float64 // weekly: tokens up to the end of today, %; 5-hour: used at an even pace, %
 	Over  float64 // Used − Even, percentage points
-	Ahead float64 // weekly: Over in day budgets
+	Ahead float64 // weekly: days of tokens beyond today already used
 	Reset time.Time
 	// When the limit runs out at the current pace; zero: it lasts until the reset.
 	RunOut time.Time
@@ -98,106 +88,167 @@ type Pace struct {
 	Level  Level
 }
 
-// Weekly pace, on the same model as the day cells: the week's budget split evenly over
-// its calendar days (WeekSchedule). Ahead is measured in day budgets: being one day
-// ahead means that keeping to the daily budget from now on, the limit runs out one day
-// before the reset.
-func WeekPace(win Window, now time.Time) Pace {
+// Weekly pace. Both modes count "ahead" in day budgets (100/7 % each):
+//
+//   - hours (default): expected usage grows with the clock, evenly over the active
+//     hours (all day, or 09–24 with quiet nights). Yellow once more than AheadMargin
+//     day ahead; red more than a day ahead. Keeping to the schedule from now on, the
+//     limit runs out at RunOut.
+//   - days: today is the day labeled with today's date; on budget while usage stays
+//     within the tokens up to the end of today. Yellow once tomorrow's tokens are
+//     touched, red more than a day beyond today.
+func WeekPace(win Window, now time.Time, conf Config) Pace {
 	if !win.Live(now) {
 		return Pace{}
 	}
-	sched := WeekSchedule(win, now.Location())
+	sched := WeekSchedule(win, now.Location(), conf.Night)
 	reset := win.Reset()
+	budget := sched.Budget()
 
-	out := Pace{Used: win.Used, Even: sched.At(now), Reset: reset}
+	out := Pace{Used: win.Used, Reset: reset}
+	margin := 0.0
+	if conf.Pace == PaceDays {
+		today := calendarDays(sched.Days[0][0], now)
+		out.Even = math.Min(100, float64(today+1)*budget)
+	} else {
+		out.Even = sched.At(now)
+		margin = AheadMargin
+	}
 	out.Over = out.Used - out.Even
-	out.PerDay = math.Max(0, 100-out.Used) / reset.Sub(now).Hours() * 24
+	out.Ahead = out.Over / budget
+	// The rest spread over the active days left (15 h a day with quiet nights).
+	if active := sched.Active(now, reset); active > 0 {
+		out.PerDay = math.Max(0, 100-out.Used) * float64(sched.ActivePerDay()) / float64(active)
+	}
 
-	out.Ahead = out.Over / sched.Budget()
-	if out.Used >= 100 {
+	switch {
+	case out.Used >= 100:
 		out.RunOut = now
-	} else if out.Ahead > 0 {
-		// Keeping to the schedule from now, what is left lasts until the schedule
-		// reaches Even + left.
-		out.RunOut = sched.When(out.Even + out.Left())
+	case out.Ahead <= margin:
+	case conf.Pace == PaceDays:
+		out.RunOut = reset.Add(-time.Duration(out.Ahead * float64(Day))).Round(time.Minute)
+	default:
+		out.RunOut = sched.When(out.Even + out.Left()).Round(time.Minute)
 	}
-	out.Level = WeekLevel(out.Ahead, out.Left(), LevelUnknown)
+	out.Level = WeekLevel(out.Ahead, out.Left(), margin)
 	return out
 }
 
-// Thresholds in day budgets ahead of the schedule.
-var aheadThresholds = map[Level]float64{LevelSoon: AheadMargin, LevelWarn: 1, LevelBad: 2}
+// Calendar days from the date of `from` to the date of `to`, in the location of `to`.
+func calendarDays(from, to time.Time) int {
+	y1, m1, d1 := from.In(to.Location()).Date()
+	y2, m2, d2 := to.Date()
+	one := time.Date(y1, m1, d1, 0, 0, 0, 0, time.UTC)
+	two := time.Date(y2, m2, d2, 0, 0, 0, 0, time.UTC)
+	return int(two.Sub(one) / Day)
+}
 
-// Leaving a level takes LevelHysteresis less than entering it: usage moves in whole
-// percents while the schedule moves every second, so a value sitting on a threshold
-// would otherwise flip the color with every update. `prev` is the level shown last.
-func WeekLevel(ahead, left float64, prev Level) Level {
-	if left < LeftBad {
+// Up to `margin` day ahead: as usual. Beyond: yellow. More than a day ahead, or under
+// 10% left: red.
+func WeekLevel(ahead, left, margin float64) Level {
+	switch {
+	case left < LeftBad || ahead > 1:
 		return LevelBad
+	case ahead > margin:
+		return LevelSoon
+	default:
+		return LevelOk
 	}
-	for _, level := range []Level{LevelBad, LevelWarn, LevelSoon} {
-		limit := aheadThresholds[level]
-		if prev >= level {
-			limit -= LevelHysteresis
-		}
-		if ahead > limit {
-			return level
-		}
-	}
-	return LevelOk
 }
 
-// Even spend over a weekly window: calendar days (local midnight to midnight, the first
-// and the last cut by the reset time), the same budget for each, spent linearly within
-// a day. The day cells and the weekly pace both use it.
-type Schedule struct{ Days [][2]time.Time }
+// The week's tokens: 7 days of 24 h counted from the reset time (a reset at 14:00 makes
+// every day run 14:00 to 14:00), the same budget for each (100/7 %). The day cells and
+// the weekly pace both use it. With quiet nights, only 09:00–24:00 count as active time;
+// every 24 h holds the same 15 active hours, so day boundaries keep their 100/7 % steps.
+type Schedule struct {
+	Days  [][2]time.Time
+	Night bool
+}
 
-func WeekSchedule(win Window, loc *time.Location) Schedule {
-	reset := win.Reset().In(loc)
-	var out Schedule
-	for begin := reset.Add(-Week); begin.Before(reset); {
-		y, m, d := begin.Date()
-		end := time.Date(y, m, d+1, 0, 0, 0, 0, loc)
-		if end.After(reset) {
-			end = reset
-		}
-		out.Days = append(out.Days, [2]time.Time{begin, end})
-		begin = end
+func WeekSchedule(win Window, loc *time.Location, night bool) Schedule {
+	start := win.Reset().In(loc).Add(-Week)
+	out := Schedule{Night: night}
+	for ind := range 7 {
+		begin := start.Add(time.Duration(ind) * Day)
+		out.Days = append(out.Days, [2]time.Time{begin, begin.Add(Day)})
 	}
 	return out
+}
+
+// Active time between `from` and `to`: all of it, or without 00:00–09:00 of every date.
+func (self Schedule) Active(from, to time.Time) time.Duration {
+	return ActiveTime(from, to, self.Night)
+}
+
+func ActiveTime(from, to time.Time, night bool) time.Duration {
+	if !to.After(from) {
+		return 0
+	}
+	if !night {
+		return to.Sub(from)
+	}
+	var out time.Duration
+	y, m, d := from.Date()
+	for day := time.Date(y, m, d, 0, 0, 0, 0, from.Location()); day.Before(to); {
+		next := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, day.Location())
+		awake := time.Date(day.Year(), day.Month(), day.Day(), NightEnd, 0, 0, 0, day.Location())
+		lo, hi := maxTime(from, awake), minTime(to, next)
+		if hi.After(lo) {
+			out += hi.Sub(lo)
+		}
+		day = next
+	}
+	return out
+}
+
+func (self Schedule) ActivePerDay() time.Duration {
+	if self.Night {
+		return Day - NightEnd*time.Hour
+	}
+	return Day
+}
+
+func (self Schedule) start() time.Time { return self.Days[0][0] }
+func (self Schedule) end() time.Time   { return self.Days[len(self.Days)-1][1] }
+
+// % of the week the schedule has spent by `at`.
+func (self Schedule) At(at time.Time) float64 {
+	if !at.Before(self.end()) {
+		return 100 // exactly, not a sum with rounding
+	}
+	return 100 * float64(self.Active(self.start(), at)) / float64(self.Active(self.start(), self.end()))
+}
+
+// The moment the schedule reaches `used` % of the week: the first moment with that much
+// active time behind it.
+func (self Schedule) When(used float64) time.Time {
+	if used >= 100 {
+		return self.end()
+	}
+	need := time.Duration(used / 100 * float64(self.Active(self.start(), self.end())))
+	at := self.start()
+	for at.Before(self.end()) {
+		y, m, d := at.Date()
+		next := time.Date(y, m, d+1, 0, 0, 0, 0, at.Location())
+		if next.After(self.end()) {
+			next = self.end()
+		}
+		got := self.Active(at, next)
+		if got >= need {
+			if self.Night {
+				awake := time.Date(y, m, d, NightEnd, 0, 0, 0, at.Location())
+				at = maxTime(at, awake)
+			}
+			return at.Add(need)
+		}
+		need -= got
+		at = next
+	}
+	return self.end()
 }
 
 // % of the week each day holds.
 func (self Schedule) Budget() float64 { return 100 / float64(len(self.Days)) }
-
-// % of the week the schedule has spent by `at`.
-func (self Schedule) At(at time.Time) float64 {
-	budget := self.Budget()
-	out := 0.0
-	for _, day := range self.Days {
-		switch {
-		case !at.After(day[0]):
-			return out
-		case !at.Before(day[1]):
-			out += budget
-		default:
-			return out + budget*float64(at.Sub(day[0]))/float64(day[1].Sub(day[0]))
-		}
-	}
-	return out
-}
-
-// The moment the schedule reaches `used` % of the week.
-func (self Schedule) When(used float64) time.Time {
-	budget := self.Budget()
-	for ind, day := range self.Days {
-		if used <= budget*float64(ind+1) {
-			frac := clamp01((used - budget*float64(ind)) / budget)
-			return day[0].Add(time.Duration(frac * float64(day[1].Sub(day[0]))))
-		}
-	}
-	return self.Days[len(self.Days)-1][1]
-}
 
 // Linear pace of a window of the given length: the five-hour window.
 func WindowPace(win Window, length time.Duration, now time.Time) Pace {
@@ -240,10 +291,8 @@ func paceLevel(pace Pace, length time.Duration) Level {
 		early = pace.Reset.Sub(pace.RunOut)
 	}
 	switch {
-	case pace.Left() < LeftBad || early > 2*part:
+	case pace.Left() < LeftBad || early > part:
 		return LevelBad
-	case early > part:
-		return LevelWarn
 	case early > 0:
 		return LevelSoon
 	default:
@@ -264,8 +313,8 @@ type Bar struct {
 	Title string
 }
 
-func MenuBar(lim Limits, now time.Time) Bar {
-	pace := WeekPace(lim.SevenDay, now)
+func MenuBar(lim Limits, now time.Time, conf Config) Bar {
+	pace := WeekPace(lim.SevenDay, now, conf)
 	level := max(pace.Level, FiveHourLevel(lim.FiveHour, now))
 	if pace.Level == LevelUnknown {
 		return Bar{Level: LevelUnknown, Title: "—"}
@@ -274,9 +323,9 @@ func MenuBar(lim Limits, now time.Time) Bar {
 }
 
 // Menu lines, top to bottom.
-func Details(lim Limits, capturedAt time.Time, now time.Time) []string {
+func Details(lim Limits, capturedAt time.Time, now time.Time, conf Config) []string {
 	var out []string
-	pace := WeekPace(lim.SevenDay, now)
+	pace := WeekPace(lim.SevenDay, now, conf)
 
 	if pace.Level == LevelUnknown {
 		out = append(out, "Week: no data yet, waiting for a Claude Code reply")

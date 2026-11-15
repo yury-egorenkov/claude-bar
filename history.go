@@ -79,32 +79,31 @@ var dayStateNames = [...]string{"past", "today", "future"}
 
 func (self DayState) MarshalText() ([]byte, error) { return []byte(dayStateNames[self]), nil }
 
-// One calendar day of the weekly window, midnight to midnight in local time. The first
-// and the last day are cut by the window (a reset at 14:00 makes them 10 h and 14 h long).
-// Every day holds the same budget: 100% split evenly over the days (12.5% for 8 days).
+// One day of the weekly window, labeled by the calendar date it starts on.
 //
 // Two independent measures per day:
-//   - Left: tokens. The week's budget is laid out over the days in order, and usage
-//     consumes it from the first day on, whatever the date: unspent budget of a past
-//     day stays in that day until usage reaches it.
-//   - TimeLeft: the clock. Share of the day still ahead: 0 for past days, 1 for future.
+//   - Left: tokens. 24 h from the reset time (14:00 to 14:00 for a reset at 14:00),
+//     100/7 % of the week each. Usage consumes the days in order, whatever the date:
+//     unspent budget of a past day stays in that day until usage reaches it.
+//   - TimeLeft: the clock, nothing computed: the share of the labeled calendar date still
+//     ahead, midnight to midnight, whatever the settings. 0 for past dates, 1 for future
+//     ones. State (today = bold) follows it.
 type DayView struct {
 	Start    int64    `json:"start"` // epoch seconds, inside the window
 	End      int64    `json:"end"`
-	State    DayState `json:"state"`
-	Budget   float64  `json:"budget"`    // % of the week this day holds: 100 / number of days
+	State    DayState `json:"state"`     // by the calendar date
+	Budget   float64  `json:"budget"`    // % of the week this day holds: 100/7
 	Left     float64  `json:"left"`      // share of this day's budget not consumed yet, 0–1
 	TimeLeft float64  `json:"time_left"` // share of the day's time still ahead, 0–1
 	// Usage has consumed more of this day than its time has passed: spending ahead of time.
 	Ahead bool    `json:"ahead"`
-	Spent float64 `json:"spent"` // % of the week actually spent on this calendar day (history)
+	Spent float64 `json:"spent"` // % of the week actually spent on that calendar date (history)
 	Known bool    `json:"known"` // false: no samples cover the day (before the first sample)
 }
 
 // Days of one weekly limit: `limit` is a model name, empty for all models.
-// Calendar days in the location of `now`. The current moment counts as a sample,
-// so today is up to date even between fetches.
-func WeekDays(history []Sample, limit string, week Window, now time.Time) []DayView {
+// The current moment counts as a sample, so today is up to date even between fetches.
+func WeekDays(history []Sample, limit string, week Window, now time.Time, conf Config) []DayView {
 	if !week.Live(now) {
 		return []DayView{}
 	}
@@ -119,35 +118,41 @@ func WeekDays(history []Sample, limit string, week Window, now time.Time) []DayV
 	}
 	samples = append(samples, Sample{At: now.Unix(), Limit: limit, Used: week.Used, ResetsAt: week.ResetsAt})
 
-	sched := WeekSchedule(week, loc)
+	sched := WeekSchedule(week, loc, conf.Night)
 	budget := sched.Budget()
 
 	out := []DayView{}
 	for ind, bound := range sched.Days {
 		begin, end := bound[0], bound[1]
 		day := DayView{Start: begin.Unix(), End: end.Unix(), Budget: budget}
-		// This day's budget spans [ind·budget, (ind+1)·budget] on the week's 0–100 scale.
+		// Tokens: this day's budget spans [ind·budget, (ind+1)·budget] on the week's
+		// 0–100 scale, in the 24 h from the reset time.
 		day.Left = clamp01((float64(ind+1)*budget - week.Used) / budget)
 
-		upTo := end
+		// Clock: the calendar date the day is labeled with, midnight to midnight.
+		y, m, d := begin.Date()
+		calBegin := time.Date(y, m, d, 0, 0, 0, 0, loc)
+		calEnd := time.Date(y, m, d+1, 0, 0, 0, 0, loc)
+		upTo := calEnd
 		switch {
-		case !now.Before(end):
+		case !now.Before(calEnd):
 			day.State = DayPast
-		case !now.Before(begin):
+		case !now.Before(calBegin):
 			day.State = DayToday
-			day.TimeLeft = float64(end.Sub(now)) / float64(end.Sub(begin))
+			day.TimeLeft = float64(calEnd.Sub(now)) / float64(calEnd.Sub(calBegin))
 			upTo = now
 		default:
 			day.State = DayFuture
 			day.TimeLeft = 1
 		}
 
-		// Consumed share against passed share. The margin keeps the color steady while
-		// the clock and usage (whole percents) run neck and neck.
-		day.Ahead = (1 - day.Left) > (1-day.TimeLeft)+AheadMargin
+		// Blue shorter than green: tokens going faster than the clock. The margin keeps
+		// the color steady while the two run neck and neck.
+		day.Ahead = day.Left < day.TimeLeft-CellMargin
 
+		// Actual spend on that calendar date, from the history.
 		if day.State != DayFuture {
-			from, okFrom := usedAt(samples, start, begin)
+			from, okFrom := usedAt(samples, start, calBegin)
 			to, okTo := usedAt(samples, start, upTo)
 			day.Known = okFrom && okTo
 			if day.Known {

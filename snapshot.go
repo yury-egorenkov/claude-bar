@@ -17,6 +17,7 @@ type Snapshot struct {
 	Models    []ModelView `json:"models"` // per-model weekly limits, e.g. Fable
 	Days      []DayView   `json:"days"`   // the 7 days of the weekly window, spend per day
 	Error     string      `json:"error"`  // last usage API error; data may still come from the status line
+	Config    Config      `json:"config"` // settings, for the menu checkmarks
 }
 
 type ModelView struct {
@@ -40,15 +41,16 @@ type View struct {
 	Level    Level   `json:"level"`
 }
 
-func MakeSnapshot(state State, connected bool, now time.Time) Snapshot {
+func MakeSnapshot(state State, connected bool, now time.Time, conf Config) Snapshot {
 	lim := state.Limits
-	bar := MenuBar(lim, now)
+	bar := MenuBar(lim, now, conf)
 
 	out := Snapshot{
 		Connected: connected,
 		Level:     bar.Level,
 		Badge:     bar.Title,
-		Week:      makeView(WeekPace(lim.SevenDay, now)),
+		Week:      makeView(WeekPace(lim.SevenDay, now, conf)),
+		Config:    conf,
 		FiveHour:  makeView(WindowPace(lim.FiveHour, FiveHour, now)),
 	}
 	if bar.Level == LevelUnknown {

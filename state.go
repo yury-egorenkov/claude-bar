@@ -143,35 +143,51 @@ func maxTime(one, two time.Time) time.Time {
 	return two
 }
 
-// The weekly level shown last, for WeekLevel's hysteresis. A new window starts fresh.
-type ShownLevel struct {
-	ResetsAt int64 `json:"resets_at"`
-	Level    Level `json:"level"`
+func minTime(one, two time.Time) time.Time {
+	if one.Before(two) {
+		return one
+	}
+	return two
 }
 
-func shownLevelPath() string { return filepath.Join(ConfigDir(), "level.json") }
+// Settings, changed from the app's menu (`claudebar-cli set ...`).
+type Config struct {
+	Pace  PaceMode `json:"pace"`  // empty: hours
+	Night bool     `json:"night"` // quiet nights: 00:00–09:00 holds no budget
+}
 
-func ReadShownLevel(resetsAt int64) Level {
-	body, err := os.ReadFile(shownLevelPath())
+type PaceMode string
+
+const (
+	PaceHours PaceMode = "hours"
+	PaceDays  PaceMode = "days"
+)
+
+func configPath() string { return filepath.Join(ConfigDir(), "config.json") }
+
+func ReadConfig() Config {
+	body, err := os.ReadFile(configPath())
 	if os.IsNotExist(err) {
-		return LevelUnknown
+		return Config{}
 	}
 	gg.Try(err)
-	var shown struct {
-		ResetsAt int64  `json:"resets_at"`
-		Level    string `json:"level"`
-	}
-	gg.JsonDecode(body, &shown)
-	if shown.ResetsAt != resetsAt {
-		return LevelUnknown
-	}
-	return ParseLevel(shown.Level)
+	return gg.JsonDecodeTo[Config](body)
 }
 
-func WriteShownLevel(resetsAt int64, level Level) {
-	if ReadShownLevel(resetsAt) == level {
-		return
-	}
+func WriteConfig(conf Config) {
 	gg.Try(os.MkdirAll(ConfigDir(), 0o700))
-	gg.Try(os.WriteFile(shownLevelPath(), gg.JsonBytes(ShownLevel{ResetsAt: resetsAt, Level: level}), 0o600))
+	gg.Try(os.WriteFile(configPath(), gg.JsonBytes(conf), 0o600))
+}
+
+// `claudebar-cli set pace hours|days`, `claudebar-cli set night on|off`.
+func SetConfig(conf Config, key, val string) Config {
+	switch {
+	case key == "pace" && (val == string(PaceHours) || val == string(PaceDays)):
+		conf.Pace = PaceMode(val)
+	case key == "night" && (val == "on" || val == "off"):
+		conf.Night = val == "on"
+	default:
+		panic(gg.Errf("unknown setting %q %q: use pace hours|days or night on|off", key, val))
+	}
+	return conf
 }

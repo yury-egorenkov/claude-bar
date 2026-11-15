@@ -10,11 +10,11 @@ import SwiftUI
 
 // MARK: - Data from `claudebar-cli json`
 
-// By how early the limit runs out at the current pace (the Go helper decides):
-// ok lasts until the reset; soon up to a day early (yellow); warn more than a day (orange);
-// bad more than 2 days or under 10% left (red). For the 5-hour window, in proportion.
+// By how early the limit runs out (the Go helper decides): ok lasts until the reset;
+// soon runs out up to a day early (yellow); bad more than a day early or under 10% left
+// (red). For the 5-hour window, in proportion.
 enum Level: String, Decodable {
-    case unknown, ok, soon, warn, bad
+    case unknown, ok, soon, bad
 
     // On pace the app stays quiet: system accent in the panel, monochrome in the menu bar.
     var color: Color { self == .ok ? .accentColor : Color(nsColor: nsColor) }
@@ -23,13 +23,12 @@ enum Level: String, Decodable {
         switch self {
         case .ok: return .controlAccentColor
         case .soon: return .systemYellow
-        case .warn: return .systemOrange
         case .bad: return .systemRed
         case .unknown: return .systemGray
         }
     }
 
-    var alarming: Bool { self == .soon || self == .warn || self == .bad }
+    var alarming: Bool { self == .soon || self == .bad }
 
     // For text: system yellow is unreadable on a light background, so in the light
     // appearance yellow text is a dark amber.
@@ -44,8 +43,7 @@ enum Level: String, Decodable {
 
     var label: String {
         switch self {
-        case .soon: return "Tight"
-        case .warn: return "Ahead of pace"
+        case .soon: return "Runs out early"
         case .bad: return "Slow down"
         default: return ""
         }
@@ -70,8 +68,8 @@ struct ModelView: Decodable, Identifiable {
     var id: String { name }
 }
 
-// One calendar day of the weekly window; state: past, today, future. The first and the
-// last day are cut by the reset time, so the budget is each day's share of the week.
+// One day of the weekly window: tokens over 24 h from the reset time, the clock (state,
+// timeLeft) over the calendar date it is labeled with.
 struct DayView: Decodable, Identifiable {
     var start: Int64 = 0
     var end: Int64 = 0
@@ -95,6 +93,14 @@ struct Snapshot: Decodable {
     var models: [ModelView] = []
     var days: [DayView] = []
     var error = ""
+    var config = Settings()
+}
+
+// `config` in the snapshot: pace "hours" (or empty) / "days", quiet nights.
+struct Settings: Decodable {
+    var pace = ""
+    var night = false
+    var byDays: Bool { pace == "days" }
 }
 
 // MARK: - Model
@@ -128,6 +134,16 @@ final class Model: ObservableObject {
     func connect() {
         do {
             _ = try runHelper(["connect"])
+            refresh()
+        } catch {
+            self.error = "\(error)"
+        }
+    }
+
+    // `claudebar-cli set pace hours|days`, `set night on|off`.
+    func set(_ key: String, _ value: String) {
+        do {
+            _ = try runHelper(["set", key, value])
             refresh()
         } catch {
             self.error = "\(error)"
@@ -224,12 +240,12 @@ struct ClaudeBarApp: App {
 // MARK: - Menu bar badge
 
 // A rounded rect with the weekly % left inside. On pace: outline, template image,
-// so macOS tints it like the system icons. Running out early: filled yellow, orange or red.
+// so macOS tints it like the system icons. Running out early: filled yellow or red.
 func badgeImage(text: String, level: Level) -> NSImage {
     let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
     let alarming = level.alarming
     let fill = level.nsColor
-    // Dark text on yellow and orange, white on red; the template image is plain black.
+    // Dark text on yellow, white on red; the template image is plain black.
     let textColor: NSColor = level == .bad ? .white : (alarming ? NSColor.black.withAlphaComponent(0.85) : .black)
     let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
     let textSize = (text as NSString).size(withAttributes: attrs)
@@ -388,10 +404,10 @@ struct Limits: View {
     }
 }
 
-// One cell per calendar day of the weekly window (8 when the reset is not at midnight).
-// Blue is tokens: the week's budget laid over the days, consumed from the first day on,
-// whatever the date; the number is the % of that day's budget left. Green is the clock:
-// the time left of that day. Usage ahead of time turns the spent part orange.
+// One cell per day of the weekly window. Blue is tokens: 100/7 % per 24 h from the reset
+// time, consumed from the first day on, whatever the date; the number is the % of that
+// budget left. Green is the clock: the time left of the labeled calendar date, to midnight.
+// Blue shorter than green turns the spent part orange.
 struct DayStrip: View {
     var days: [DayView]
 
@@ -596,20 +612,29 @@ struct Actions: View {
     var updatedAt: Int64
 
     var body: some View {
+        let conf = model.snapshot.config
+
         VStack(spacing: 0) {
-            MenuRow(title: "Refresh") { model.refresh() }
-            MenuRow(title: "Start at Login", checked: model.startAtLogin) { model.startAtLogin.toggle() }
+            MenuRow(icon: "clock", title: "Pace by hours", checked: !conf.byDays) { model.set("pace", "hours") }
+            MenuRow(icon: "calendar", title: "Pace by days", checked: conf.byDays) { model.set("pace", "days") }
+            MenuRow(icon: "moon.zzz", title: "Quiet nights 00–09", checked: conf.night) {
+                model.set("night", conf.night ? "off" : "on")
+            }
             Divider().padding(.vertical, 6).padding(.horizontal, 8)
-            MenuRow(title: "ClaudeBar by egorsky.com") {
+            MenuRow(icon: "arrow.clockwise", title: "Refresh") { model.refresh() }
+            MenuRow(icon: "power", title: "Start at Login", checked: model.startAtLogin) { model.startAtLogin.toggle() }
+            Divider().padding(.vertical, 6).padding(.horizontal, 8)
+            MenuRow(icon: "globe", title: "ClaudeBar by egorsky.com") {
                 if let url = URL(string: "https://egorsky.com") { NSWorkspace.shared.open(url) }
             }
-            MenuRow(title: "Quit ClaudeBar") { NSApp.terminate(nil) }
+            MenuRow(icon: "xmark.circle", title: "Quit ClaudeBar") { NSApp.terminate(nil) }
         }
     }
 }
 
-// Every row keeps the checkmark column, so titles line up like in a native menu.
+// Icon at the left edge, title, checkmark at the right edge.
 struct MenuRow: View {
+    var icon: String
     var title: String
     var checked = false
     var action: () -> Void
@@ -617,13 +642,17 @@ struct MenuRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .opacity(checked ? 1 : 0)
-                    .frame(width: 12)
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
                 Text(title).font(.system(size: 14))
                 Spacer()
+                if checked {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)

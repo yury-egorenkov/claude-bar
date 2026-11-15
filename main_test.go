@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,64 +20,68 @@ func testAt(frac float64) time.Time {
 	return testReset.Add(-Week).Add(time.Duration(frac * float64(Week)))
 }
 
-// A moment by calendar date and hour, UTC.
-func testTime(day, hour int) time.Time { return time.Date(2026, 11, day, hour, 0, 0, 0, time.UTC) }
+// A moment by hours since the window start (Sat 14.11 10:00 UTC).
+func testHour(h float64) time.Time {
+	return testReset.Add(-Week).Add(time.Duration(h * float64(time.Hour)))
+}
 
-// The window Sat 14.11 10:00 → Sat 21.11 10:00 UTC has 8 calendar days of 12.5% each.
+// A var, not a const: constant expressions are folded exactly and differ from runtime math.
+var testBudget = 100 / float64(7)
+
+var testDays = Config{Pace: PaceDays}
+
+// The window Sat 14.11 10:00 → Sat 21.11 10:00 UTC: 7 days of 24 h, 100/7 % each.
 func TestWeekSchedule(t *testing.T) {
 	defer gtest.Catch(t)
 
-	sched := WeekSchedule(testWeek(0), time.UTC)
-	gtest.Eq(len(sched.Days), 8)
-	gtest.Eq(sched.Budget(), 12.5)
-	gtest.Eq(sched.At(testTime(14, 10)), 0.0)
-	gtest.Eq(sched.At(testTime(14, 17)), 6.25) // half of Sat's 14 h
-	gtest.Eq(sched.At(testTime(15, 0)), 12.5)
-	gtest.Eq(sched.At(testTime(18, 12)), 56.25) // 4 days + half of Wed
-	gtest.Eq(sched.At(testTime(21, 10)), 100.0)
-	gtest.Eq(sched.When(56.25), testTime(18, 12))
-	gtest.Eq(sched.When(100), testTime(21, 10))
+	sched := WeekSchedule(testWeek(0), time.UTC, false)
+	gtest.Eq(len(sched.Days), 7)
+	gtest.Eq(sched.Days[1], [2]time.Time{testHour(24), testHour(48)})
+	gtest.Eq(sched.Budget(), testBudget)
+	gtest.Eq(calendarDays(testHour(0), testHour(84)), 3)  // Sat 14 → Tue 17
+	gtest.Eq(calendarDays(testHour(0), testHour(166)), 7) // Sat 21 08:00, before the reset
 }
 
-// Wed 18.11 12:00: the schedule has spent 56.25%.
+// Tue 17.11 22:00: today is the 4th day, tokens up to the end of today are 4/7 = 57.1%.
 func TestWeekPace_levels(t *testing.T) {
 	defer gtest.Catch(t)
 
-	now := testTime(18, 12)
-	pace := WeekPace(testWeek(56.25), now)
-	gtest.Eq(pace.Even, 56.25)
+	now := testHour(84)
+	pace := WeekPace(testWeek(50), now, testDays)
+	gtest.Eq(pace.Even, 4*testBudget)
 	gtest.Eq(pace.Level, LevelOk)
 	gtest.True(pace.RunOut.IsZero())
 
-	// 0.06 day ahead: within the margin.
-	gtest.Eq(WeekPace(testWeek(57), now).Level, LevelOk)
-	// 0.3 day ahead: keeping to the budget from now, it runs out Sat 07:00 instead of 10:00.
-	pace = WeekPace(testWeek(60), now)
+	// Within today's tokens.
+	gtest.Eq(WeekPace(testWeek(57), now, testDays).Level, LevelOk)
+	// 0.2 day of tomorrow's tokens used: yellow; keeping to the budget from tomorrow,
+	// it runs out 4.8 h early, Sat 05:12.
+	pace = WeekPace(testWeek(60), now, testDays)
 	gtest.Eq(pace.Level, LevelSoon)
-	gtest.Eq(pace.RunOut, testTime(21, 7))
-	// 1.5 days ahead.
-	gtest.Eq(WeekPace(testWeek(75), now).Level, LevelWarn)
-	// 2.3 days ahead.
-	gtest.Eq(WeekPace(testWeek(85), now).Level, LevelBad)
-	// Behind the schedule, but under 10% left.
-	gtest.Eq(WeekPace(testWeek(92), testTime(20, 23)).Level, LevelBad)
+	gtest.True(pace.RunOut.Equal(testHour(163.2)))
+	// 0.9 day beyond today: still yellow; over a day: red.
+	gtest.Eq(WeekPace(testWeek(70), now, testDays).Level, LevelSoon)
+	gtest.Eq(WeekPace(testWeek(72), now, testDays).Level, LevelBad)
+	// Within the tokens, but under 10% left.
+	gtest.Eq(WeekPace(testWeek(92), testHour(160), testDays).Level, LevelBad)
 }
 
-// Saturday's 10 h hold a full day's 12.5%: 11% on Sunday morning is behind the budget.
+// The first day holds 14.3% however much of it is left.
 func TestWeekPace_firstDay(t *testing.T) {
 	defer gtest.Catch(t)
 
-	gtest.Eq(WeekPace(testWeek(11), testTime(15, 1)).Level, LevelOk)
-	gtest.Eq(WeekPace(testWeek(4), testTime(14, 13)).Level, LevelOk)
-	// 20% in the first 3 hours: 1.4 days ahead.
-	gtest.Eq(WeekPace(testWeek(20), testTime(14, 13)).Level, LevelWarn)
+	gtest.Eq(WeekPace(testWeek(10), testHour(3), testDays).Level, LevelOk)
+	gtest.Eq(WeekPace(testWeek(20), testHour(3), testDays).Level, LevelSoon)
+	gtest.Eq(WeekPace(testWeek(30), testHour(3), testDays).Level, LevelBad)
+	// Sat 21 before the reset: every day's tokens are available.
+	gtest.Eq(WeekPace(testWeek(85), testHour(166), testDays).Level, LevelOk)
 }
 
 func TestWeekPace_spent(t *testing.T) {
 	defer gtest.Catch(t)
 
 	now := testAt(0.9)
-	pace := WeekPace(testWeek(100), now)
+	pace := WeekPace(testWeek(100), now, testDays)
 	gtest.Eq(pace.Level, LevelBad)
 	gtest.Eq(pace.RunOut, now)
 	gtest.Eq(pace.PerDay, 0.0)
@@ -85,34 +90,34 @@ func TestWeekPace_spent(t *testing.T) {
 func TestWeekPace_unknown(t *testing.T) {
 	defer gtest.Catch(t)
 
-	gtest.Eq(WeekPace(Window{}, testAt(0.5)).Level, LevelUnknown)
-	gtest.Eq(WeekPace(testWeek(30), testReset.Add(time.Minute)).Level, LevelUnknown)
+	gtest.Eq(WeekPace(Window{}, testAt(0.5), testDays).Level, LevelUnknown)
+	gtest.Eq(WeekPace(testWeek(30), testReset.Add(time.Minute), testDays).Level, LevelUnknown)
 }
 
 func TestMenuBar(t *testing.T) {
 	defer gtest.Catch(t)
 
-	now := testTime(18, 12)
-	gtest.Eq(MenuBar(Limits{SevenDay: testWeek(50)}, now), Bar{Left: 50, Level: LevelOk, Title: "50%"})
-	gtest.Eq(MenuBar(Limits{SevenDay: testWeek(85)}, now), Bar{Left: 15, Level: LevelBad, Title: "15%"})
-	gtest.Eq(MenuBar(Limits{}, now), Bar{Level: LevelUnknown, Title: "—"})
+	now := testHour(84)
+	gtest.Eq(MenuBar(Limits{SevenDay: testWeek(50)}, now, testDays), Bar{Left: 50, Level: LevelOk, Title: "50%"})
+	gtest.Eq(MenuBar(Limits{SevenDay: testWeek(85)}, now, testDays), Bar{Left: 15, Level: LevelBad, Title: "15%"})
+	gtest.Eq(MenuBar(Limits{}, now, testDays), Bar{Level: LevelUnknown, Title: "—"})
 
 	// The week is fine, but the five-hour window is nearly used up.
 	five := Window{Used: 92, ResetsAt: now.Add(time.Hour).Unix()}
-	gtest.Eq(MenuBar(Limits{SevenDay: testWeek(50), FiveHour: five}, now).Level, LevelBad)
+	gtest.Eq(MenuBar(Limits{SevenDay: testWeek(50), FiveHour: five}, now, testDays).Level, LevelBad)
 }
 
 func TestDetails(t *testing.T) {
 	defer gtest.Catch(t)
 
-	now := testTime(18, 12)
+	now := testHour(84) // Tue 22:00
 	gtest.Equal(
-		Details(Limits{SevenDay: testWeek(60)}, now.Add(-5*time.Minute), now),
+		Details(Limits{SevenDay: testWeek(60)}, now.Add(-5*time.Minute), now, testDays),
 		[]string{
-			"Week: 40% left · even pace 44%",
-			"Even at the daily budget it runs out: Sat 07:00",
-			"Reset: Sat 10:00 · budget 14% per day",
-			"Updated: 11:55 (5 min ago)",
+			"Week: 40% left · even pace 43%",
+			"Even at the daily budget it runs out: Sat 05:12",
+			"Reset: Sat 10:00 · budget 11% per day",
+			"Updated: 21:55 (5 min ago)",
 		},
 	)
 }
@@ -147,45 +152,46 @@ func TestState_roundtrip(t *testing.T) {
 func TestStatuslineText(t *testing.T) {
 	defer gtest.Catch(t)
 
-	now := testTime(18, 12)
+	now := testHour(84) // Tue 22:00
 	var input StatuslineInput
 	input.Model.DisplayName = "Opus 5.5"
 	input.RateLimits = Limits{SevenDay: testWeek(50), FiveHour: Window{Used: 23.5, ResetsAt: now.Add(2 * time.Hour).Unix()}}
-	gtest.Eq(statuslineText(input, now), "")
+	gtest.Eq(statuslineText(input, now, testDays), "")
 
 	input.RateLimits.SevenDay = testWeek(60)
-	gtest.Eq(statuslineText(input, now), "week 40% left · runs out Sat 07:00")
+	gtest.Eq(statuslineText(input, now, testDays), "week 40% left · runs out Sat 05:12")
 
-	// 5-hour window: 3 of 5 h passed, 80% used, runs out 45 min early.
+	// 5-hour window: 3 of 5 h passed, 80% used, runs out 75 min early.
 	input.RateLimits.SevenDay = testWeek(85)
 	input.RateLimits.FiveHour.Used = 80
-	gtest.Eq(statuslineText(input, now), "week 15% left · runs out Thu 16:48 · 5h 20% left · slow down")
+	gtest.Eq(statuslineText(input, now, testDays), "week 15% left · runs out Thu 11:12 · 5h 20% left · slow down")
 }
 
 func TestMakeSnapshot(t *testing.T) {
 	defer gtest.Catch(t)
 
-	now := testTime(18, 12)
+	now := testHour(84)
 	five := Window{Used: 40, ResetsAt: now.Add(time.Hour).Unix()}
 	state := State{Limits: Limits{SevenDay: testWeek(60), FiveHour: five}, CapturedAt: now.Add(-time.Minute)}
 
-	gtest.Equal(MakeSnapshot(state, true, now), Snapshot{
+	gtest.Equal(MakeSnapshot(state, true, now, testDays), Snapshot{
 		Connected: true,
 		UpdatedAt: now.Add(-time.Minute).Unix(),
 		Level:     LevelSoon,
 		Badge:     "40%",
 		Week: View{
-			Has: true, Left: 40, EvenLeft: 43.75, ResetsAt: testReset.Unix(),
-			RunOutAt: testTime(21, 7).Unix(), Ahead: (60 - 56.25) / 12.5, PerDay: 40 / testReset.Sub(now).Hours() * 24, Level: LevelSoon,
+			Has: true, Left: 40, EvenLeft: 100 - 4*testBudget, ResetsAt: testReset.Unix(),
+			RunOutAt: testHour(163.2).Round(time.Minute).Unix(), Ahead: (60 - 4*testBudget) / testBudget, PerDay: 40 * float64(Day) / float64(testReset.Sub(now)), Level: LevelSoon,
 		},
 		// 4 of 5 hours passed: even pace leaves 20%.
 		FiveHour: View{Has: true, Left: 60, EvenLeft: 20, ResetsAt: five.ResetsAt, Level: LevelOk},
 		Models:   []ModelView{},
 		Days:     []DayView{},
+		Config:   testDays,
 	})
 
-	gtest.Equal(MakeSnapshot(State{}, false, now), Snapshot{Badge: "–", Models: []ModelView{}, Days: []DayView{}})
-	gtest.Eq(string(gg.JsonBytes(LevelWarn)), `"warn"`)
+	gtest.Equal(MakeSnapshot(State{}, false, now, testDays), Snapshot{Badge: "–", Models: []ModelView{}, Days: []DayView{}, Config: testDays})
+	gtest.Eq(string(gg.JsonBytes(LevelSoon)), `"soon"`)
 }
 
 func TestNewestState(t *testing.T) {
@@ -204,60 +210,60 @@ func TestNewestState(t *testing.T) {
 	gtest.True(AnyConnected([]string{mac, box}))
 }
 
-// The window runs Sat 14.11 10:00 → Sat 21.11 10:00 UTC: 8 calendar days,
-// the first 14 h long, the last 10 h.
+// The window runs Sat 14.11 10:00 → Sat 21.11 10:00 UTC: 7 days of 24 h from 10:00.
 func TestWeekDays(t *testing.T) {
 	defer gtest.Catch(t)
 
-	start := testReset.Add(-Week)
-	hour := func(h float64) time.Time { return start.Add(time.Duration(h * float64(time.Hour))) }
 	at := func(h float64, used float64) Sample {
-		return Sample{At: hour(h).Unix(), Used: used, ResetsAt: testReset.Unix()}
+		return Sample{At: testHour(h).Unix(), Used: used, ResetsAt: testReset.Unix()}
 	}
-	midnight := func(day int) int64 { return time.Date(2026, 11, day, 0, 0, 0, 0, time.UTC).Unix() }
-
 	history := []Sample{
 		at(10, 6),  // Sat 20:00
-		at(13, 9),  // Sat 23:00, last sample of Sat
-		at(20, 14), // Sun 06:00
-		at(37, 20), // Sun 23:00, last sample of Sun
-		// Mon: the Mac was off, no samples
-		at(70, 30), // Tue 08:00
-		{At: hour(1).Unix(), Used: 99, ResetsAt: 1},                                // another window: ignored
-		{At: hour(1).Unix(), Limit: "Fable", Used: 50, ResetsAt: testReset.Unix()}, // another limit: ignored
+		at(23, 14), // Sun 09:00
+		at(30, 20), // Sun 16:00
+		at(47, 23), // Mon 09:00
+		at(75, 30), // Tue 13:00
+		{At: testHour(1).Unix(), Used: 99, ResetsAt: 1},                                // another window: ignored
+		{At: testHour(1).Unix(), Limit: "Fable", Used: 50, ResetsAt: testReset.Unix()}, // another limit: ignored
 	}
-	now := hour(71) // Tue 09:00
-	days := WeekDays(history, "", testWeek(31), now)
+	now := testHour(76) // Tue 17.11 14:00
+	days := WeekDays(history, "", testWeek(31), now, testDays)
 
-	gtest.Eq(len(days), 8)
-	// 8 days, 12.5% each. 31% used consumes Sat, Sun and 6.5 of Mon's 12.5: Mon keeps 52%
-	// although it is past; Tue onward untouched.
-	const budget = 12.5
-	monLeft := (3*budget - 31) / budget
-	gtest.Eq(days[0], DayView{Start: start.Unix(), End: midnight(15), State: DayPast, Budget: budget, Spent: 9, Known: true})
-	gtest.Eq(days[1], DayView{Start: midnight(15), End: midnight(16), State: DayPast, Budget: budget, Spent: 11, Known: true})
-	// Nothing sampled on Mon: its spend shows up on Tue.
-	gtest.Eq(days[2], DayView{Start: midnight(16), End: midnight(17), State: DayPast, Budget: budget, Left: monLeft, Spent: 0, Known: true})
-	gtest.Eq(days[3], DayView{Start: midnight(17), End: midnight(18), State: DayToday, Budget: budget, Left: 1, TimeLeft: 15.0 / 24, Spent: 11, Known: true})
-	gtest.Eq(days[4], DayView{Start: midnight(18), End: midnight(19), State: DayFuture, Budget: budget, Left: 1, TimeLeft: 1})
-	gtest.Eq(days[7], DayView{Start: midnight(21), End: testReset.Unix(), State: DayFuture, Budget: budget, Left: 1, TimeLeft: 1})
+	gtest.Eq(len(days), 7)
+	// Tokens: 31% used consumes days 0 and 1 and 2.4 of day 2's 14.3, so day 2 keeps 83%
+	// although it is past; day 3 onward untouched.
+	// Clock and spend: calendar dates Sat 14, Sun 15, Mon 16 are past, Tue 17 is today
+	// with 10 of 24 h left.
+	day := func(ind int) (int64, int64) {
+		return testHour(float64(24 * ind)).Unix(), testHour(float64(24 * (ind + 1))).Unix()
+	}
+	s0, e0 := day(0)
+	s1, e1 := day(1)
+	s2, e2 := day(2)
+	s3, e3 := day(3)
+	s4, e4 := day(4)
+	gtest.Eq(days[0], DayView{Start: s0, End: e0, State: DayPast, Budget: testBudget, Spent: 6, Known: true})
+	gtest.Eq(days[1], DayView{Start: s1, End: e1, State: DayPast, Budget: testBudget, Spent: 14, Known: true})
+	gtest.Eq(days[2], DayView{Start: s2, End: e2, State: DayPast, Budget: testBudget, Left: (3*testBudget - 31) / testBudget, Spent: 3, Known: true})
+	gtest.Eq(days[3], DayView{Start: s3, End: e3, State: DayToday, Budget: testBudget, Left: 1, TimeLeft: 10.0 / 24, Spent: 8, Known: true})
+	gtest.Eq(days[4], DayView{Start: s4, End: e4, State: DayFuture, Budget: testBudget, Left: 1, TimeLeft: 1})
 
-	// 60% used on Tue 09:00: usage reaches into Wed, a day still ahead in time.
-	days = WeekDays(history, "", testWeek(60), now)
+	// 60% used: today's tokens are gone with 42% of the day left, and day 4 is eaten into.
+	days = WeekDays(history, "", testWeek(60), now, testDays)
 	gtest.Eq(days[3].Left, 0.0)
 	gtest.True(days[3].Ahead)
 	gtest.True(days[4].Ahead)
 	gtest.False(days[5].Ahead)
 
-	// History starting on Mon: earlier days are unknown.
-	days = WeekDays([]Sample{at(50, 23)}, "", testWeek(31), now)
+	// History starting on Mon 12:00: earlier dates are unknown.
+	days = WeekDays([]Sample{at(50, 23)}, "", testWeek(31), now, testDays)
 	gtest.Eq(days[0].Known, false)
 	gtest.Eq(days[1].Known, false)
 	// The first sample is inside Mon: its start is not covered either.
 	gtest.Eq(days[2].Known, false)
 	gtest.Eq(days[3].Spent, 8.0)
 
-	gtest.Equal(WeekDays(history, "", Window{}, now), []DayView{})
+	gtest.Equal(WeekDays(history, "", Window{}, now, testDays), []DayView{})
 }
 
 func TestAppendHistory(t *testing.T) {
@@ -286,7 +292,7 @@ func TestWeekDays_model(t *testing.T) {
 		{At: start.Add(10 * time.Hour).Unix(), Limit: "Fable", Used: 4, ResetsAt: testReset.Unix()},
 	}
 	now := start.Add(30 * time.Hour)
-	days := WeekDays(history, "Fable", Window{Used: 6, ResetsAt: testReset.Unix()}, now)
+	days := WeekDays(history, "Fable", Window{Used: 6, ResetsAt: testReset.Unix()}, now, testDays)
 	gtest.Eq(days[0].Spent, 4.0)
 	gtest.Eq(days[1].Spent, 2.0)
 }
@@ -308,17 +314,88 @@ func TestCombineStates(t *testing.T) {
 	gtest.Eq(CombineStates(line, api).Limits.SevenDay, api.Limits.SevenDay)
 }
 
-func TestWeekLevel_hysteresis(t *testing.T) {
+func TestWeekLevel(t *testing.T) {
 	defer gtest.Catch(t)
 
-	// Entering soon takes more than 0.15 day ahead, leaving it less than 0.05.
-	gtest.Eq(WeekLevel(0.12, 50, LevelOk), LevelOk)
-	gtest.Eq(WeekLevel(0.16, 50, LevelOk), LevelSoon)
-	gtest.Eq(WeekLevel(0.12, 50, LevelSoon), LevelSoon)
-	gtest.Eq(WeekLevel(0.04, 50, LevelSoon), LevelOk)
-	// The same between warn and bad.
-	gtest.Eq(WeekLevel(1.95, 50, LevelBad), LevelBad)
-	gtest.Eq(WeekLevel(1.95, 50, LevelWarn), LevelWarn)
-	gtest.Eq(WeekLevel(0.5, 5, LevelOk), LevelBad)
-	gtest.Eq(ParseLevel("warn"), LevelWarn)
+	gtest.Eq(WeekLevel(-0.04, 50, 0), LevelOk)
+	gtest.Eq(WeekLevel(0, 50, 0), LevelOk)
+	gtest.Eq(WeekLevel(0.01, 50, 0), LevelSoon)
+	gtest.Eq(WeekLevel(1, 50, 0), LevelSoon)
+	gtest.Eq(WeekLevel(1.01, 50, 0), LevelBad)
+	gtest.Eq(WeekLevel(-0.5, 5, 0), LevelBad)
+}
+
+// Hours mode, Tue 17.11 22:00, half the week: the schedule has spent 50%.
+func TestWeekPace_hours(t *testing.T) {
+	defer gtest.Catch(t)
+
+	now := testHour(84)
+	hours := Config{}
+	pace := WeekPace(testWeek(50), now, hours)
+	gtest.Eq(pace.Even, 50.0)
+	gtest.Eq(pace.Level, LevelOk)
+	gtest.True(pace.RunOut.IsZero())
+
+	// 0.07 day ahead: within the margin.
+	gtest.Eq(WeekPace(testWeek(51), now, hours).Level, LevelOk)
+	// 0.35 day ahead: keeping to the schedule, it runs out Sat 01:36 instead of 10:00.
+	pace = WeekPace(testWeek(55), now, hours)
+	gtest.Eq(pace.Level, LevelSoon)
+	gtest.True(pace.RunOut.Equal(testHour(159.6)))
+	// 0.9 day ahead: yellow; 1.4: red.
+	gtest.Eq(WeekPace(testWeek(62.8), now, hours).Level, LevelSoon)
+	gtest.Eq(WeekPace(testWeek(70), now, hours).Level, LevelBad)
+}
+
+// Quiet nights: 09:00–24:00 active, 15 h in every 24 h, 105 h in the week.
+func TestSchedule_night(t *testing.T) {
+	defer gtest.Catch(t)
+
+	sched := WeekSchedule(testWeek(0), time.UTC, true)
+	near := func(one, two float64) bool { return math.Abs(one-two) < 1e-9 }
+
+	// Sat 10:00 → Sun 00:00: 14 active hours; the night adds nothing.
+	gtest.True(near(sched.At(testHour(14)), 100*14.0/105))
+	gtest.Eq(sched.At(testHour(23)), sched.At(testHour(14)))
+	// Every day boundary (10:00) is a whole day budget.
+	gtest.True(near(sched.At(testHour(24)), testBudget))
+	gtest.True(near(sched.At(testHour(72)), 3*testBudget))
+	// Back from the percentage to the moment: the night is skipped.
+	gtest.Eq(sched.When(100*14.0/105+0.001).Hour(), 9)
+	gtest.Eq(sched.When(sched.At(testHour(30))).Round(time.Second), testHour(30))
+	gtest.Eq(sched.ActivePerDay(), 15*time.Hour)
+}
+
+func TestWeekPace_night(t *testing.T) {
+	defer gtest.Catch(t)
+
+	// Wed 18.11 05:00, the night after 3 full days and Tue 10:00–24:00: expected usage
+	// stays at the Tue midnight value until 09:00.
+	night := Config{Night: true}
+	at5 := WeekPace(testWeek(50), testHour(91), night)
+	at8 := WeekPace(testWeek(50), testHour(94), night)
+	gtest.Eq(at5.Even, at8.Even)
+	// By then 59 of 105 active hours are behind (56.2%), more than 91 of 168 hours (54.2%).
+	gtest.True(math.Abs(at5.Even-100*59.0/105) < 1e-9)
+	gtest.True(at5.Even > WeekPace(testWeek(50), testHour(91), Config{}).Even)
+}
+
+// The green line is the plain clock: quiet nights do not change it.
+func TestWeekDays_clock(t *testing.T) {
+	defer gtest.Catch(t)
+
+	// Tue 17.11 14:00: 10 of today's 24 h are left, with or without quiet nights.
+	plain := WeekDays(nil, "", testWeek(31), testHour(76), Config{})
+	night := WeekDays(nil, "", testWeek(31), testHour(76), Config{Night: true})
+	gtest.Eq(plain[3].State, DayToday)
+	gtest.Eq(plain[3].TimeLeft, 10.0/24)
+	gtest.Eq(night[3].TimeLeft, 10.0/24)
+}
+
+func TestSetConfig(t *testing.T) {
+	defer gtest.Catch(t)
+
+	gtest.Eq(SetConfig(Config{}, "pace", "days"), Config{Pace: PaceDays})
+	gtest.Eq(SetConfig(Config{Pace: PaceDays}, "night", "on"), Config{Pace: PaceDays, Night: true})
+	gtest.PanicStr("unknown setting", func() { SetConfig(Config{}, "pace", "weeks") })
 }

@@ -29,6 +29,7 @@ const usage = `claudebar <command>
   json        snapshot for the ClaudeBar app: limits left, pace, forecast;
               starts "fetch" in the background when the API result is older than 2 min
   fetch       one request to the usage API with the Claude Code token (api.anthropic.com only)
+  set         settings: set pace hours|days, set night on|off (quiet nights 00–09)
   connect     add statusLine to ~/.claude/settings.json (backup: settings.json.claudebar-backup)
   show        limits and pace as text (check without the menu bar)`
 
@@ -48,6 +49,11 @@ func main() {
 		RunFetch()
 	case "connect":
 		Connect(SettingsPath(), Executable())
+	case "set":
+		if len(args) != 2 {
+			panic(gg.Errf("usage: claudebar-cli set pace hours|days, or set night on|off"))
+		}
+		WriteConfig(SetConfig(ReadConfig(), args[0], args[1]))
 	case "statusline":
 		runStatusline(args)
 	case "show":
@@ -89,7 +95,7 @@ func runStatusline(args []string) {
 		fmt.Print(runThen(*then, body))
 		return
 	}
-	fmt.Println(statuslineText(input, now))
+	fmt.Println(statuslineText(input, now, ReadConfig()))
 }
 
 func saveLimits(path string, next Limits, now time.Time) {
@@ -108,11 +114,11 @@ func runThen(cmd string, stdin []byte) string {
 }
 
 // Empty while spending is on pace: the line appears only when there is something to act on.
-func statuslineText(input StatuslineInput, now time.Time) string {
+func statuslineText(input StatuslineInput, now time.Time, conf Config) string {
 	var parts []string
 	lim := input.RateLimits
 
-	pace := WeekPace(lim.SevenDay, now)
+	pace := WeekPace(lim.SevenDay, now, conf)
 	if pace.Level >= LevelSoon {
 		parts = append(parts, fmt.Sprintf("week %.0f%% left", pace.Left()))
 		if !pace.RunOut.IsZero() {
@@ -137,16 +143,12 @@ func runJson(now time.Time) Snapshot {
 	usage := ReadState(UsagePath())
 	state := CombineStates(NewestState(dirs), usage)
 
-	snap := MakeSnapshot(state, AnyConnected(dirs) || !usage.CapturedAt.IsZero(), now)
-	if snap.Week.Has {
-		snap.Week.Level = WeekLevel(snap.Week.Ahead, snap.Week.Left, ReadShownLevel(snap.Week.ResetsAt))
-		snap.Level = max(snap.Week.Level, snap.FiveHour.Level)
-		WriteShownLevel(snap.Week.ResetsAt, snap.Week.Level)
-	}
+	conf := ReadConfig()
+	snap := MakeSnapshot(state, AnyConnected(dirs) || !usage.CapturedAt.IsZero(), now, conf)
 	history := ReadHistory(HistoryPath())
-	snap.Days = WeekDays(history, "", state.Limits.SevenDay, now)
+	snap.Days = WeekDays(history, "", state.Limits.SevenDay, now, conf)
 	for ind, model := range snap.Models {
-		snap.Models[ind].Days = WeekDays(history, model.Name, model.Window(), now)
+		snap.Models[ind].Days = WeekDays(history, model.Name, model.Window(), now, conf)
 	}
 	snap.Error = ReadUsageErr()
 	if fetchErr != nil {
@@ -162,9 +164,10 @@ func runShow() {
 	if snap.Error != "" {
 		fmt.Println("API:", snap.Error)
 	}
-	bar := MenuBar(state.Limits, now)
+	conf := ReadConfig()
+	bar := MenuBar(state.Limits, now, conf)
 	fmt.Println(bar.Level.Mark(), bar.Title)
-	for _, line := range Details(state.Limits, state.CapturedAt, now) {
+	for _, line := range Details(state.Limits, state.CapturedAt, now, conf) {
 		fmt.Println(line)
 	}
 }

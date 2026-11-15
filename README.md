@@ -8,59 +8,65 @@ Made by [egorsky.com](https://egorsky.com). MIT License.
 
 ## Menu bar
 
-A rounded rect with the weekly % left inside. Its color shows how far usage is ahead of the daily budget (the same budget the day cells show: the week split evenly over its calendar days), counted in days:
+A rounded rect with the weekly % left inside. Its color shows how far usage is ahead of the week's budget, counted in days (one day = 100/7 % of the week). Two ways to count, chosen in the panel:
 
-| Look | Ahead of the daily budget |
-|------|---------------------------|
-| Outline, system color | less than 0.15 of a day |
-| Yellow | up to 1 day |
-| Orange | 1 to 2 days |
-| Red | more than 2 days, or under 10% left |
-| `–` | no data yet |
+| | Pace by hours (default) | Pace by days |
+|---|---|---|
+| Expected usage | grows with the clock, evenly over the week's hours | the tokens up to the end of today (the cell with today's date) |
+| Outline, system color | at most 0.15 day ahead | within today's tokens |
+| Yellow | more than 0.15 day ahead, up to 1 day | tomorrow's tokens started |
+| Red | more than 1 day ahead | more than a full day beyond today |
 
-One day ahead means that even keeping to the daily budget from now on, the limit runs out a day before the reset. To leave a level, the value has to fall 0.1 day below its threshold, so a value sitting on a threshold does not flip the color back and forth. The 5-hour window has its own rule: red or orange when, at the current rate, it runs out before its reset; the worse of the two wins.
+Red also when under 10% is left; `–` means no data yet. "Runs out" in the panel is when the limit ends even keeping to the budget from now on.
+
+**Quiet nights 00–09** (a panel setting, off by default): the hours 00:00–09:00 hold no budget. Expected usage stands still at night. The green line stays the plain clock. Every 24 hours still hold 15 active hours, so the day cells keep 100/7 % each.
+
+The 5-hour window has its own rule (yellow when at its current rate it runs out before its reset, red when more than 43 min early); the worse of the two wins.
 
 ## Panel
 
 Click the badge:
 
 ```
-Claude usage                         ● Ahead of pace   (only when running out early)
+Claude usage                        ● Runs out early   (only when it does)
 Updated just now
 ────────────────────────────────────────────
 PLAN USAGE LIMITS
 Weekly · all models         62% left · Resets 3d
- Sat   Sun   Mon   Tue   Wed   Thu   Fri   Sat
-[ 0%] [ 0%] [ 0%] [96%] [100%][100%][100%][100%]  tokens: budget left per day
-               ▔▔▔▔ ▔▔▔▔ ▔▔▔▔ ▔▔▔▔ ▔▔▔▔  green: time left of the day
-Runs out Fri 18:20 even at the daily budget       (only when ahead)
+ Sat    Sun    Mon    Tue    Wed    Thu    Fri
+[ 0% ] [ 0% ] [66% ] [100%] [100%] [100%] [100%]  tokens: budget left per day
+               ▔▔▔▔   ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  green: time left of the day
+Runs out Fri 18:20 even at the daily budget       (only when yellow or red)
 Today 3% of 14% · 15% a day for 4 days
 Weekly · Fable             100% left · Resets 3d
- Sat   Sun   Mon   Tue   Wed   Thu   Fri   Sat
-[100%][100%][100%][100%][100%][100%][100%][100%]
+ Sat    Sun    Mon    Tue    Wed    Thu    Fri
+[100%] [100%] [100%] [100%] [100%] [100%] [100%]
 5-hour session              76% left · Resets 2h
 [░░░░░░██████████████████]
 ────────────────────────────────────────────
-Refresh
-✓ Start at Login
-ClaudeBar by egorsky.com
-Quit ClaudeBar
+🕒 Pace by hours                            ✓
+📅 Pace by days
+🌙 Quiet nights 00–09
+────────────────────────────────────────────
+↻  Refresh
+⏻  Start at Login                           ✓
+────────────────────────────────────────────
+🌐 ClaudeBar by egorsky.com
+⊗  Quit ClaudeBar
 ```
 
 Weekly limits (all models and each model) show a 7-day strip instead of a bar; the 5-hour window keeps a bar. Both show what is left at the right end; the spent part grows from the left, like time through the week.
 
 ### Days
 
-Cells are calendar days, midnight to midnight; today's name is bold and switches at midnight. A week that resets at 14:00 covers 8 days; the first and the last are cut by the reset time (10 h and 14 h). Every day holds the same token budget: 100% split evenly, 12.5% for 8 days.
+Each cell is labeled with a weekday and has two measures, independent of each other:
 
-Each cell has two measures, independent of each other:
+- **Blue: tokens.** The week is 7 days of 24 hours counted from the reset time (a reset on Saturday at 14:00 gives Sat 14:00 → Sun 14:00, Sun 14:00 → Mon 14:00, and so on); each holds 100/7 ≈ 14.3% of the week. Usage consumes them in order, whatever the date: unspent budget of a past day stays in that day until usage reaches it. The number inside is the % of that day's budget left.
+- **Green: the clock.** The thin line under each cell is the time left of its calendar date, midnight to midnight, and nothing else: at 22:00, today's line has 2 of 24 hours left. No setting changes it. Past dates are empty, future ones full. Today's name is bold and switches at midnight.
 
-- **Blue: tokens.** The week's budget is laid over the days in order, an equal share each, and usage consumes it from the first day on, whatever the date. Unspent budget of a past day stays in that day until usage reaches it. The number inside is the % of that day's budget left. When usage has consumed more of a day than its time has passed (by more than 15% of the day), the spent part of that cell turns orange: you are ahead of time.
-- **Green: the clock.** The thin line under each cell is the time left of that day: empty for past days, shrinking through today, full for future days.
+Both keep what is left at the right end. When blue is shorter than green by more than 15%, the spent part of the cell turns orange: tokens are going faster than the clock. Hover a cell for its budget and the actual spend on that date.
 
-Both keep what is left at the right end. Hover a cell for its budget and that calendar day's actual spend.
-
-The cells need only the current percentage. For the actual spend per calendar day (the hover and the "Today" line) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
+The cells need only the current percentage. For the actual spend per calendar date (the hover and the "Today" line) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
 
 ## How it works
 
@@ -78,6 +84,7 @@ Two sources. Within one window usage only grows, so where they disagree by a poi
 | Part | What it does |
 |------|--------------|
 | `ClaudeBar` (SwiftUI, `app/ClaudeBar.swift`) | runs `claudebar-cli json` every 20 s and when the panel opens; draws the badge and the panel. Rendering only |
+| `claudebar-cli set` (Go) | settings from the panel: `set pace hours\|days`, `set night on\|off`, kept in `~/.config/claudebar/config.json` |
 | `claudebar-cli json` (Go) | pace, forecast, daily budget, levels, days: everything the app shows. Starts `claudebar-cli fetch` in the background when the API result is older than 2 min |
 | `claudebar-cli fetch` (Go) | one usage API request. Result in `~/.config/claudebar/usage.json`, error in `usage-error.txt`, a weekly sample appended to `history.jsonl` |
 | `claudebar-cli statusline` (Go) | status line command: keeps only `rate_limits`, writes `~/.claude/claudebar.json` (mode 600). Prints a line only when a limit runs out before its reset (`week 25% left · runs out Thu 02:00 · slow down`), otherwise nothing |
