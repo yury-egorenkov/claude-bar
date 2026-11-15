@@ -363,15 +363,16 @@ struct Limits: View {
             VStack(alignment: .leading, spacing: 8) {
                 WeeklyLimit(title: "Weekly · all models", left: snap.week.left, resetsAt: snap.week.resetsAt,
                             days: snap.days, color: snap.week.level.color)
-                if let forecast {
-                    Text(forecast)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(snap.week.level.textColor)
+                // All in % of the weekly limit.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(budgetLine)
+                        .font(.system(size: 12, weight: snap.week.level.alarming ? .medium : .regular))
+                        .foregroundStyle(snap.week.level.alarming ? snap.week.level.textColor : .secondary)
+                    Text(leftLine)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
-                Text(dayNote)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                .monospacedDigit()
             }
 
             ForEach(snap.models) { model in
@@ -386,21 +387,23 @@ struct Limits: View {
         }
     }
 
-    private var forecast: String? {
+    // "Used 29% · 9% over budget": usage against what the budget allows by now
+    // (the pace setting decides: by the hours or up to the end of today).
+    private var budgetLine: String {
         let week = snap.week
-        if week.left <= 0 { return "Used up until the reset" }
-        if week.runOutAt == 0 || !week.level.alarming { return nil }
-        return "Runs out \(when(week.runOutAt)) even at the daily budget"
+        let used = "Used \(percent(100 - week.left))"
+        if week.left <= 0 { return used + " · limit reached" }
+        let over = week.evenLeft - week.left
+        if abs(over) < 0.5 { return used + " · on budget" }
+        return used + " · \(percent(abs(over))) \(over > 0 ? "over" : "under") budget"
     }
 
-    // "Today 3% of 14% · 15% a day for 4 days"
-    private var dayNote: String {
+    // "71% left · 12% a day for 6 days"
+    private var leftLine: String {
         let week = snap.week
         let secs = max(0, TimeInterval(week.resetsAt) - Date().timeIntervalSince1970)
-        let daysLeft = max(1, Int((secs / 86400).rounded(.up)))
-        let budget = "\(percent(week.perDay)) a day for \(daysLeft) \(daysLeft == 1 ? "day" : "days")"
-        guard let today = snap.days.first(where: { $0.state == "today" }), today.known else { return budget }
-        return "Today \(percent(today.spent)) of \(percent(today.budget)) · \(budget)"
+        let days = max(1, Int((secs / 86400).rounded(.up)))
+        return "\(percent(week.left)) left · \(percent(week.perDay)) a day for \(days) \(days == 1 ? "day" : "days")"
     }
 }
 

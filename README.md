@@ -17,7 +17,7 @@ A rounded rect with the weekly % left inside. Its color shows how far usage is a
 | Yellow | more than 0.15 day ahead, up to 1 day | tomorrow's tokens started |
 | Red | more than 1 day ahead | more than a full day beyond today |
 
-Red also when under 10% is left; `–` means no data yet. "Runs out" in the panel is when the limit ends even keeping to the budget from now on.
+Red also when under 10% is left; `–` means no data yet. Under the weekly cells, everything is in % of the weekly limit: used so far, how much over or under the budget for this moment, what is left and how much that allows per day.
 
 **Quiet nights 00–09** (a panel setting, off by default): the hours 00:00–09:00 hold no budget. Expected usage stands still at night. The green line stays the plain clock. Every 24 hours still hold 15 active hours, so the day cells keep 100/7 % each.
 
@@ -36,8 +36,8 @@ Weekly · all models         62% left · Resets 3d
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
 [ 0% ] [ 0% ] [66% ] [100%] [100%] [100%] [100%]  tokens: budget left per day
                ▔▔▔▔   ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  green: time left of the day
-Runs out Fri 18:20 even at the daily budget       (only when yellow or red)
-Today 3% of 14% · 15% a day for 4 days
+Used 38% · 9% over budget                         (colored when yellow or red)
+62% left · 15% a day for 4 days
 Weekly · Fable             100% left · Resets 3d
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
 [100%] [100%] [100%] [100%] [100%] [100%] [100%]
@@ -66,7 +66,7 @@ Each cell is labeled with a weekday and has two measures, independent of each ot
 
 Both keep what is left at the right end. When blue is shorter than green by more than 15%, the spent part of the cell turns orange: tokens are going faster than the clock. Hover a cell for its budget and the actual spend on that date.
 
-The cells need only the current percentage. For the actual spend per calendar date (the hover and the "Today" line) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
+The cells need only the current percentage. For the actual spend per calendar date (the hover) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
 
 ## How it works
 
