@@ -17,7 +17,7 @@ A rounded rect with the weekly % left inside. Its color shows how far usage is a
 | Yellow | more than 0.15 day ahead, up to 1 day | tomorrow's tokens started |
 | Red | more than 1 day ahead | more than a full day beyond today |
 
-Red also when under 10% is left; `–` means no data yet. Under the weekly cells, everything is in % of the weekly limit: used so far, how much over or under the budget for this moment, what is left and how much that allows per day.
+Red also when under 10% is left; `–` means no data yet. Under the weekly cells, one line in % of the weekly limit: used so far, how much over or under the budget for this moment, and how much per day the rest allows until the reset.
 
 **Quiet nights 00–09** (a panel setting, off by default): the hours 00:00–09:00 hold no budget. Expected usage stands still at night. The green line stays the plain clock. Every 24 hours still hold 15 active hours, so the day cells keep 100/7 % each.
 
@@ -34,13 +34,12 @@ Updated just now
 PLAN USAGE LIMITS
 Weekly · all models         62% left · Resets 3d
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
-[ 0% ] [ 0% ] [66% ] [100%] [100%] [100%] [100%]  tokens: budget left per day
+[ 0% ] [ 0% ] [ 9% ] [14% ] [14% ] [14% ] [14% ]  tokens left per day, % of the week
                ▔▔▔▔   ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  green: time left of the day
-Used 38% · 9% over budget                         (colored when yellow or red)
-62% left · 15% a day for 4 days
+Used 38% · 9% over budget · 15% a day            (colored when yellow or red)
 Weekly · Fable             100% left · Resets 3d
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
-[100%] [100%] [100%] [100%] [100%] [100%] [100%]
+[14% ] [14% ] [14% ] [14% ] [14% ] [14% ] [14% ]
 5-hour session              76% left · Resets 2h
 [░░░░░░██████████████████]
 ────────────────────────────────────────────
@@ -61,10 +60,10 @@ Weekly limits (all models and each model) show a 7-day strip instead of a bar; t
 
 Each cell is labeled with a weekday and has two measures, independent of each other:
 
-- **Blue: tokens.** The week is 7 days of 24 hours counted from the reset time (a reset on Saturday at 14:00 gives Sat 14:00 → Sun 14:00, Sun 14:00 → Mon 14:00, and so on); each holds 100/7 ≈ 14.3% of the week. Usage consumes them in order, whatever the date: unspent budget of a past day stays in that day until usage reaches it. The number inside is the % of that day's budget left.
+- **Blue: tokens.** The week is 7 days of 24 hours counted from the reset time (a reset on Saturday at 14:00 gives Sat 14:00 → Sun 14:00, Sun 14:00 → Mon 14:00, and so on); each holds 100/7 ≈ 14.3% of the week. Usage consumes them in order, whatever the date: unspent budget of a past day stays in that day until usage reaches it. The number inside is the tokens left in that day, in % of the week: a full day shows 14%, and the cells add up to the week's % left.
 - **Green: the clock.** The thin line under each cell is the time left of its calendar date, midnight to midnight, and nothing else: at 22:00, today's line has 2 of 24 hours left. No setting changes it. Past dates are empty, future ones full. Today's name is bold and switches at midnight.
 
-Both keep what is left at the right end. When blue is shorter than green by more than 15%, the spent part of the cell turns orange: tokens are going faster than the clock. Hover a cell for its budget and the actual spend on that date.
+Both keep what is left at the right end. Used tokens beyond what the budget allows by now (the pace setting decides: by the hours, or up to the end of today) are orange, next to the blue: the same overspend as "over budget" in the line below and the color of the badge. Hover a cell for its budget and the actual spend on that date.
 
 The cells need only the current percentage. For the actual spend per calendar date (the hover) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -95,8 +96,9 @@ type DayView struct {
 	Budget   float64  `json:"budget"`    // % of the week this day holds: 100/7
 	Left     float64  `json:"left"`      // share of this day's budget not consumed yet, 0–1
 	TimeLeft float64  `json:"time_left"` // share of the day's time still ahead, 0–1
-	// Usage has consumed more of this day than its time has passed: spending ahead of time.
-	Ahead bool    `json:"ahead"`
+	// Share of this day's budget used ahead of the budget for now (the part of the used
+	// tokens past the point the budget allows by now), 0–1: drawn orange.
+	Over  float64 `json:"over"`
 	Spent float64 `json:"spent"` // % of the week actually spent on that calendar date (history)
 	Known bool    `json:"known"` // false: no samples cover the day (before the first sample)
 }
@@ -120,6 +122,8 @@ func WeekDays(history []Sample, limit string, week Window, now time.Time, conf C
 
 	sched := WeekSchedule(week, loc, conf.Night)
 	budget := sched.Budget()
+	// The point on the week's 0–100 scale the budget allows by now (hours or days mode).
+	allowed := WeekPace(week, now, conf).Even
 
 	out := []DayView{}
 	for ind, bound := range sched.Days {
@@ -127,7 +131,10 @@ func WeekDays(history []Sample, limit string, week Window, now time.Time, conf C
 		day := DayView{Start: begin.Unix(), End: end.Unix(), Budget: budget}
 		// Tokens: this day's budget spans [ind·budget, (ind+1)·budget] on the week's
 		// 0–100 scale, in the 24 h from the reset time.
-		day.Left = clamp01((float64(ind+1)*budget - week.Used) / budget)
+		from, to := float64(ind)*budget, float64(ind+1)*budget
+		day.Left = clamp01((to - week.Used) / budget)
+		// Used tokens of this day past the allowed point.
+		day.Over = clamp01((math.Min(week.Used, to) - math.Max(allowed, from)) / budget)
 
 		// Clock: the calendar date the day is labeled with, midnight to midnight.
 		y, m, d := begin.Date()
@@ -146,17 +153,13 @@ func WeekDays(history []Sample, limit string, week Window, now time.Time, conf C
 			day.TimeLeft = 1
 		}
 
-		// Blue shorter than green: tokens going faster than the clock. The margin keeps
-		// the color steady while the two run neck and neck.
-		day.Ahead = day.Left < day.TimeLeft-CellMargin
-
 		// Actual spend on that calendar date, from the history.
 		if day.State != DayFuture {
-			from, okFrom := usedAt(samples, start, calBegin)
-			to, okTo := usedAt(samples, start, upTo)
+			usedFrom, okFrom := usedAt(samples, start, calBegin)
+			usedTo, okTo := usedAt(samples, start, upTo)
 			day.Known = okFrom && okTo
 			if day.Known {
-				day.Spent = max(0, to-from)
+				day.Spent = max(0, usedTo-usedFrom)
 			}
 		}
 		out = append(out, day)

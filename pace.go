@@ -68,8 +68,6 @@ const (
 	AheadMargin = 0.15
 	// Quiet nights: 00:00 to this hour holds no budget.
 	NightEnd = 9
-	// Day cells: tokens shorter than the clock by more than this share turn orange.
-	CellMargin = 0.15
 	// Under this % left the level is bad whatever the pace.
 	LeftBad = 10.0
 )

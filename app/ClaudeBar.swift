@@ -77,7 +77,7 @@ struct DayView: Decodable, Identifiable {
     var budget: Double = 0
     var left: Double = 0
     var timeLeft: Double = 0
-    var ahead = false
+    var over: Double = 0
     var spent: Double = 0
     var known = false
     var id: Int64 { start }
@@ -363,16 +363,11 @@ struct Limits: View {
             VStack(alignment: .leading, spacing: 8) {
                 WeeklyLimit(title: "Weekly · all models", left: snap.week.left, resetsAt: snap.week.resetsAt,
                             days: snap.days, color: snap.week.level.color)
-                // All in % of the weekly limit.
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(budgetLine)
-                        .font(.system(size: 12, weight: snap.week.level.alarming ? .medium : .regular))
-                        .foregroundStyle(snap.week.level.alarming ? snap.week.level.textColor : .secondary)
-                    Text(leftLine)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .monospacedDigit()
+                // One line, all in % of the weekly limit.
+                Text(budgetLine)
+                    .font(.system(size: 12, weight: snap.week.level.alarming ? .medium : .regular))
+                    .foregroundStyle(snap.week.level.alarming ? snap.week.level.textColor : .secondary)
+                    .monospacedDigit()
             }
 
             ForEach(snap.models) { model in
@@ -387,29 +382,21 @@ struct Limits: View {
         }
     }
 
-    // "Used 29% · 9% over budget": usage against what the budget allows by now
-    // (the pace setting decides: by the hours or up to the end of today).
+    // "Used 28% · 9% over budget · 13% a day": usage, against what the budget allows by
+    // now (the pace setting decides), and what is left per day until the reset.
     private var budgetLine: String {
         let week = snap.week
         let used = "Used \(percent(100 - week.left))"
         if week.left <= 0 { return used + " · limit reached" }
         let over = week.evenLeft - week.left
-        if abs(over) < 0.5 { return used + " · on budget" }
-        return used + " · \(percent(abs(over))) \(over > 0 ? "over" : "under") budget"
-    }
-
-    // "71% left · 12% a day for 6 days"
-    private var leftLine: String {
-        let week = snap.week
-        let secs = max(0, TimeInterval(week.resetsAt) - Date().timeIntervalSince1970)
-        let days = max(1, Int((secs / 86400).rounded(.up)))
-        return "\(percent(week.left)) left · \(percent(week.perDay)) a day for \(days) \(days == 1 ? "day" : "days")"
+        let budget = abs(over) < 0.5 ? "on budget" : "\(percent(abs(over))) \(over > 0 ? "over" : "under") budget"
+        return "\(used) · \(budget) · \(percent(week.perDay)) a day"
     }
 }
 
 // One cell per day of the weekly window. Blue is tokens: 100/7 % per 24 h from the reset
 // time, consumed from the first day on, whatever the date; the number is the % of that
-// budget left. Green is the clock: the time left of the labeled calendar date, to midnight.
+// budget left, in % of the week. Green is the clock: the time left of the labeled calendar date, to midnight.
 // Blue shorter than green turns the spent part orange.
 struct DayStrip: View {
     var days: [DayView]
@@ -429,10 +416,11 @@ struct DayCell: View {
     var body: some View {
         let today = day.state == "today"
         let left = min(max(day.left, 0), 1)
-        // Usage ate into this day ahead of its time: the spent part turns orange.
-        let track: Color = day.ahead ? Color(nsColor: .systemOrange).opacity(0.6) : Color.primary.opacity(0.08)
-        // % of the day's budget left, inside the cell.
-        let label = percent(left * 100)
+        let over = min(max(day.over, 0), 1 - left)
+        // Tokens left in this day, in % of the week: a full day shows 14%; the cells add
+        // up to the week's % left.
+        let leftOfWeek = left * day.budget
+        let label = leftOfWeek > 0 && leftOfWeek < 0.5 ? "<1%" : percent(leftOfWeek)
 
         VStack(spacing: 3) {
             Text(weekday(day.start))
@@ -442,9 +430,17 @@ struct DayCell: View {
                 let fill = geo.size.width * min(left, 1)
                 let text = Text(label).font(.system(size: 10, weight: .semibold)).monospacedDigit()
 
+                // Used part from the left; its newest stretch, used ahead of the budget,
+                // is orange right next to the blue.
+                let overWidth = geo.size.width * over
+
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(track)
+                        .fill(Color.primary.opacity(0.08))
+                    Rectangle()
+                        .fill(Color(nsColor: .systemOrange).opacity(0.75))
+                        .frame(width: overWidth)
+                        .offset(x: geo.size.width - fill - overWidth)
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.accentColor)
                         .frame(width: fill)
@@ -461,6 +457,7 @@ struct DayCell: View {
                 }
             }
             .frame(height: 16)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(Color.primary.opacity(today ? 0.45 : 0), lineWidth: 1)
@@ -481,7 +478,7 @@ struct DayCell: View {
             .frame(height: 3)
         }
         .frame(maxWidth: .infinity)
-        .help("Budget \(percent(day.budget)) of the week, \(percent(left * 100)) of it left" + (day.known ? " · \(percent(day.spent)) spent on this day" : ""))
+        .help("\(percent(leftOfWeek)) of the week left of this day's \(percent(day.budget))" + (day.known ? " · \(percent(day.spent)) spent on this date" : ""))
     }
 }
 

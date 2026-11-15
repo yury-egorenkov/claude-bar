@@ -248,12 +248,19 @@ func TestWeekDays(t *testing.T) {
 	gtest.Eq(days[3], DayView{Start: s3, End: e3, State: DayToday, Budget: testBudget, Left: 1, TimeLeft: 10.0 / 24, Spent: 8, Known: true})
 	gtest.Eq(days[4], DayView{Start: s4, End: e4, State: DayFuture, Budget: testBudget, Left: 1, TimeLeft: 1})
 
-	// 60% used: today's tokens are gone with 42% of the day left, and day 4 is eaten into.
+	// Days mode, today is day 3: the budget allows up to the end of day 3 (57.1%). At 60%
+	// the 2.9% of day 4 are over budget: 20% of its cell orange; day 3 none.
 	days = WeekDays(history, "", testWeek(60), now, testDays)
 	gtest.Eq(days[3].Left, 0.0)
-	gtest.True(days[3].Ahead)
-	gtest.True(days[4].Ahead)
-	gtest.False(days[5].Ahead)
+	gtest.Eq(days[3].Over, 0.0)
+	gtest.True(math.Abs(days[4].Over-(60-4*testBudget)/testBudget) < 1e-9)
+	gtest.Eq(days[5].Over, 0.0)
+
+	// Hours mode at the same moment (Tue 14:00, 76 of 168 h): 45.2% allowed. At 50%
+	// usage, the last 4.8% of day 3 are over budget.
+	days = WeekDays(history, "", testWeek(50), now, Config{})
+	gtest.True(math.Abs(days[3].Over-(50-100*76.0/168)/testBudget) < 1e-9)
+	gtest.Eq(days[2].Over, 0.0)
 
 	// History starting on Mon 12:00: earlier dates are unknown.
 	days = WeekDays([]Sample{at(50, 23)}, "", testWeek(31), now, testDays)
