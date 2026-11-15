@@ -31,6 +31,17 @@ enum Level: String, Decodable {
 
     var alarming: Bool { self == .soon || self == .warn || self == .bad }
 
+    // For text: system yellow is unreadable on a light background, so in the light
+    // appearance yellow text is a dark amber.
+    var textColor: Color {
+        guard self == .soon else { return color }
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? .systemYellow
+                : NSColor(srgbRed: 0x9A / 255, green: 0x67 / 255, blue: 0, alpha: 1)
+        })
+    }
+
     var label: String {
         switch self {
         case .soon: return "Tight"
@@ -339,7 +350,7 @@ struct Limits: View {
                 if let forecast {
                     Text(forecast)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(snap.week.level.color)
+                        .foregroundStyle(snap.week.level.textColor)
                 }
                 Text(dayNote)
                     .font(.system(size: 12))
