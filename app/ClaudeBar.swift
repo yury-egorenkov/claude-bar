@@ -363,11 +363,19 @@ struct Limits: View {
             VStack(alignment: .leading, spacing: 8) {
                 WeeklyLimit(title: "Weekly · all models", left: snap.week.left, resetsAt: snap.week.resetsAt,
                             days: snap.days, color: snap.week.level.color)
-                // One line, all in % of the weekly limit.
-                Text(budgetLine)
-                    .font(.system(size: 12, weight: snap.week.level.alarming ? .medium : .regular))
-                    .foregroundStyle(snap.week.level.alarming ? snap.week.level.textColor : .secondary)
-                    .monospacedDigit()
+                // One line in % of the weekly limit; when the limit runs out early, the
+                // forecast under it in the level's color.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(budgetLine)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    if let forecast {
+                        Text(forecast)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(snap.week.level.textColor)
+                    }
+                }
+                .monospacedDigit()
             }
 
             ForEach(snap.models) { model in
@@ -380,6 +388,14 @@ struct Limits: View {
                          color: snap.fiveHour.level.color)
             }
         }
+    }
+
+    // "Runs out Fri 00:21 even at the daily budget", only on yellow and red.
+    private var forecast: String? {
+        let week = snap.week
+        guard week.level.alarming, week.runOutAt > 0 else { return nil }
+        if week.left <= 0 { return "Limit reached until the reset" }
+        return "Runs out \(when(week.runOutAt)) even at the daily budget"
     }
 
     // "Used 28% · 9% over budget · 13% a day": usage, against what the budget allows by

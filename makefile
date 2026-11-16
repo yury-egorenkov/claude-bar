@@ -19,7 +19,7 @@ ARCH     := $(shell uname -m)
 # `make install CLAUDE_DIR=~/path/to/it` makes the app read it too.
 CLAUDE_DIR ?=
 
-.PHONY: help app build-app install install-app logged container run debug stop show test uninstall clean git.push
+.PHONY: help app build-app install install-app logged container run debug stop show diag test uninstall clean git.push
 
 help:
 	@echo "make install    build, copy to /Applications, start (log: $(LOG))"
@@ -29,6 +29,7 @@ help:
 	@echo "make debug      run the app in the foreground, output to $(RUNLOG) (Ctrl+C to stop)"
 	@echo "make stop       stop it"
 	@echo "make show       limits as text (no app)"
+	@echo "make diag       why data looks old: files, errors, a fetch, into build/diag.log"
 	@echo "make test       go vet + tests"
 	@echo "make uninstall  remove the app and the data file"
 	@echo "make clean      remove build/"
@@ -85,6 +86,32 @@ stop:
 
 show:
 	$(DEST)/Contents/MacOS/claudebar-cli show
+
+# Everything needed to see why the app shows old data, in build/diag.log. No tokens:
+# only file times, the helper's output and errors.
+DIAG := build/diag.log
+diag:
+	@mkdir -p build
+	@{ echo "== date"; date; \
+	  echo "== processes"; pgrep -lf -i claudebar || echo "none"; \
+	  echo "== ~/.config/claudebar"; ls -la $(HOME)/.config/claudebar 2>&1; \
+	  echo "== dirs"; cat $(HOME)/.config/claudebar/dirs 2>&1; \
+	  echo "== config"; cat $(HOME)/.config/claudebar/config.json 2>&1; echo; \
+	  echo "== usage-error"; cat $(HOME)/.config/claudebar/usage-error.txt 2>&1; echo; \
+	  echo "== usage.json"; cat $(HOME)/.config/claudebar/usage.json 2>&1; echo; \
+	  echo "== history tail"; tail -4 $(HOME)/.config/claudebar/history.jsonl 2>&1; \
+	  echo "== status line files"; for d in $(HOME)/.claude $$(cat $(HOME)/.config/claudebar/dirs 2>/dev/null); do ls -la $$d/claudebar.json 2>&1; cat $$d/claudebar.json 2>&1; echo; done; \
+	  echo "== credentials files (times only)"; for d in $(HOME)/.claude $$(cat $(HOME)/.config/claudebar/dirs 2>/dev/null); do ls -la $$d/.credentials.json 2>&1; done; \
+	  echo "== json"; $(DEST)/Contents/MacOS/claudebar-cli json 2>&1; \
+	  echo "== fetch"; $(DEST)/Contents/MacOS/claudebar-cli fetch 2>&1; echo "exit $$?"; \
+	  cat $(HOME)/.config/claudebar/usage-error.txt 2>/dev/null; \
+	  echo "== show"; $(DEST)/Contents/MacOS/claudebar-cli show 2>&1; \
+	  echo "== crash reports"; ls -t $(HOME)/Library/Logs/DiagnosticReports 2>/dev/null | grep -i claudebar | head -5; \
+	  latest=$$(ls -t $(HOME)/Library/Logs/DiagnosticReports 2>/dev/null | grep -i claudebar | head -1); \
+	  if [ -n "$$latest" ]; then head -80 "$(HOME)/Library/Logs/DiagnosticReports/$$latest"; fi; \
+	  echo "== system log, last day"; log show --last 1d --style compact --predicate 'process == "ClaudeBar"' 2>&1 | tail -40; \
+	} > $(DIAG) 2>&1
+	@echo "Written $(DIAG). Tell Claude: read the diag log."
 
 test:
 	go vet ./...
