@@ -19,7 +19,7 @@ ARCH     := $(shell uname -m)
 # `make install CLAUDE_DIR=~/path/to/it` makes the app read it too.
 CLAUDE_DIR ?=
 
-.PHONY: help app build-app install install-app logged container run debug stop show diag test uninstall clean git.push
+.PHONY: help app build-app install install-app logged container run debug stop show diag icon test uninstall clean git.push
 
 help:
 	@echo "make install    build, copy to /Applications, start (log: $(LOG))"
@@ -31,6 +31,7 @@ help:
 	@echo "make show       limits as text (no app)"
 	@echo "make diag       why data looks old: files, errors, a fetch, into build/diag.log"
 	@echo "make test       go vet + tests"
+	@echo "make icon       redraw app/AppIcon.icns and app/AppIcon.png (icongen/)"
 	@echo "make uninstall  remove the app and the data file"
 	@echo "make clean      remove build/"
 	@echo "make git.push   publish this folder as its own GitHub repo (gh), see README"
@@ -55,6 +56,8 @@ build-app:
 	CGO_ENABLED=0 go build -trimpath -o $(MACOS)/claudebar-cli .
 	swiftc -parse-as-library -O -target $(ARCH)-apple-macos13.0 -o $(MACOS)/ClaudeBar app/ClaudeBar.swift
 	cp Info.plist $(APP)/Contents/Info.plist
+	mkdir -p $(APP)/Contents/Resources
+	cp app/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	codesign --force --sign - $(MACOS)/claudebar-cli
 	codesign --force --sign - $(APP)
 
@@ -112,6 +115,9 @@ diag:
 	  echo "== system log, last day"; log show --last 1d --style compact --predicate 'process == "ClaudeBar"' 2>&1 | tail -40; \
 	} > $(DIAG) 2>&1
 	@echo "Written $(DIAG). Tell Claude: read the diag log."
+
+icon:
+	go run ./icongen
 
 test:
 	go vet ./...

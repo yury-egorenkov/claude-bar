@@ -132,11 +132,14 @@ If Claude Code runs in a Linux container whose `~/.claude` is a folder on the Ma
 | `make debug` | run the app in the foreground, output to `build/run.log` |
 | `make show` | limits as text, without the app |
 | `make test` | `go vet` and tests |
+| `make icon` | redraw the app icon |
 | `make container` | inside a Linux container with Claude Code: build the helper, connect the status line |
 | `make uninstall` | remove the app, `~/.claude/claudebar.json` and `~/.config/claudebar` |
 | `make git.push` | publish this folder as its own GitHub repo (see below) |
 
 Builds keep the full output, with tool versions, in `build/build.log`.
+
+The app icon (`app/AppIcon.icns`, preview `app/AppIcon.png`) is drawn by `icongen/` in Go: the day strip on a dark rounded square. `make icon` redraws it.
 
 ## Publishing
 
