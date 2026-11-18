@@ -146,6 +146,12 @@ func runJson(now time.Time) Snapshot {
 	conf := ReadConfig()
 	snap := MakeSnapshot(state, AnyConnected(dirs) || !usage.CapturedAt.IsZero(), now, conf)
 	history := ReadHistory(HistoryPath())
+	if week := state.Limits.SevenDay; week.Live(now) {
+		snap.Week.Rate = CurrentRate(history, week, now, conf.Night)
+		if at := RunOutAtRate(snap.Week.Left, snap.Week.Rate, now, week.Reset(), conf.Night); !at.IsZero() {
+			snap.Week.RateRunOut = at.Unix()
+		}
+	}
 	snap.Days = WeekDays(history, "", state.Limits.SevenDay, now, conf)
 	for ind, model := range snap.Models {
 		snap.Models[ind].Days = WeekDays(history, model.Name, model.Window(), now, conf)

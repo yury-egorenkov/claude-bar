@@ -37,8 +37,12 @@ type View struct {
 	ResetsAt int64   `json:"resets_at"`
 	RunOutAt int64   `json:"run_out_at"` // 0: lasts until the reset
 	Ahead    float64 `json:"ahead"`      // weekly: day budgets ahead of the schedule
-	PerDay   float64 `json:"per_day"`    // weekly only: % per day to last until the reset
-	Level    Level   `json:"level"`
+	// Weekly: the current rate (% of the week per active hour, last 2 h) and when the
+	// limit runs out at it; 0: lasts until the reset.
+	Rate       float64 `json:"rate"`
+	RateRunOut int64   `json:"rate_run_out"`
+	PerDay     float64 `json:"per_day"` // weekly only: % per day to last until the reset
+	Level      Level   `json:"level"`
 }
 
 func MakeSnapshot(state State, connected bool, now time.Time, conf Config) Snapshot {

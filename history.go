@@ -181,3 +181,41 @@ func usedAt(samples []Sample, start time.Time, at time.Time) (float64, bool) {
 	}
 	return used, ok
 }
+
+const (
+	// The current rate is measured over this much of the latest history.
+	RateWindow = 2 * time.Hour
+	// Less history than this: the week's average rate instead.
+	rateMinSpan = 15 * time.Minute
+)
+
+// Weekly usage per active hour right now, in % of the week: over the last RateWindow
+// of samples, or the week's average when the history is too short. Active hours skip
+// 00:00–09:00 with quiet nights.
+func CurrentRate(history []Sample, week Window, now time.Time, night bool) float64 {
+	if !week.Live(now) {
+		return 0
+	}
+	start := week.Reset().Add(-Week)
+	since := now.Add(-RateWindow)
+
+	var first Sample
+	found := false
+	for _, sample := range history {
+		at := time.Unix(sample.At, 0)
+		if sample.Limit == "" && sample.ResetsAt == week.ResetsAt && !at.Before(since) && !at.After(now) {
+			first, found = sample, true
+			break
+		}
+	}
+
+	from, used := start, 0.0
+	if found && now.Sub(time.Unix(first.At, 0)) >= rateMinSpan {
+		from, used = time.Unix(first.At, 0), first.Used
+	}
+	hours := ActiveTime(from, now, night).Hours()
+	if hours <= 0 {
+		return 0
+	}
+	return math.Max(0, week.Used-used) / hours
+}

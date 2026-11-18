@@ -17,7 +17,7 @@ A rounded rect with the weekly % left inside. Its color shows how far usage is a
 | Yellow | more than 0.15 day ahead, up to 1 day | tomorrow's tokens started |
 | Red | more than 1 day ahead | more than a full day beyond today |
 
-Red also when under 10% is left; `–` means no data yet. Under the weekly cells, one line in % of the weekly limit: used so far, how much over or under the budget for this moment, and how much per day the rest allows until the reset. On yellow and red a second line says when the limit runs out even keeping to the budget from now on.
+Red also when under 10% is left; `–` means no data yet. Under the weekly cells, one line in % of the weekly limit: used so far, how much over or under the budget for this moment, and how much per day the rest allows until the reset. A second line carries the current rate forward: the % of the week per hour over the last 2 hours (the week's average while the history is shorter than 15 min), and when the limit runs out at that rate. Yellow when that is before the reset, red when more than a day before; quiet nights are skipped.
 
 **Quiet nights 00–09** (a panel setting, off by default): the hours 00:00–09:00 hold no budget. Expected usage stands still at night. The green line stays the plain clock. Every 24 hours still hold 15 active hours, so the day cells keep 100/7 % each.
 
@@ -29,7 +29,7 @@ Click the badge:
 
 ```
 Claude usage                        ● Runs out early   (only when it does)
-Updated just now
+Updated just now                                  (red when older than 1 h)
 ────────────────────────────────────────────
 PLAN USAGE LIMITS
 Weekly · all models         62% left · Resets 3d
@@ -37,7 +37,7 @@ Weekly · all models         62% left · Resets 3d
 [ 0% ] [ 0% ] [ 9% ] [14% ] [14% ] [14% ] [14% ]  tokens left per day, % of the week
                ▔▔▔▔   ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  green: time left of the day
 Used 38% · 9% over budget · 15% a day
-Runs out Fri 18:20 even at the daily budget       (only when yellow or red, in that color)
+At 3.0%/h now: runs out Thu 15:20                 (yellow/red when before the reset)
 Weekly · Fable             100% left · Resets 3d
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
 [14% ] [14% ] [14% ] [14% ] [14% ] [14% ] [14% ]

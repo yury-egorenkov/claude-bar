@@ -406,3 +406,33 @@ func TestSetConfig(t *testing.T) {
 	gtest.Eq(SetConfig(Config{Pace: PaceDays}, "night", "on"), Config{Pace: PaceDays, Night: true})
 	gtest.PanicStr("unknown setting", func() { SetConfig(Config{}, "pace", "weeks") })
 }
+
+func TestCurrentRate(t *testing.T) {
+	defer gtest.Catch(t)
+
+	at := func(h float64, used float64) Sample {
+		return Sample{At: testHour(h).Unix(), Used: used, ResetsAt: testReset.Unix()}
+	}
+	now := testHour(76)
+	history := []Sample{at(70, 20), at(74, 30), at(75, 34)}
+
+	// Last 2 h: from 30% at h74 to 36% now: 3% per hour.
+	gtest.Eq(CurrentRate(history, testWeek(36), now, false), 3.0)
+	// Less than 15 min of history: the week's average, 36% over 76 h.
+	gtest.Eq(CurrentRate([]Sample{at(75.9, 35)}, testWeek(36), now, false), 36.0/76)
+	gtest.Eq(CurrentRate(history, Window{}, now, false), 0.0)
+}
+
+func TestRunOutAtRate(t *testing.T) {
+	defer gtest.Catch(t)
+
+	now := testHour(76) // Tue 14:00
+	// 64% left at 3%/h: 21 h 20 min, Wed 11:20.
+	gtest.Eq(RunOutAtRate(64, 3, now, testReset, false), testHour(97+20.0/60))
+	// At 0.3%/h it lasts the 92 h until the reset.
+	gtest.True(RunOutAtRate(64, 0.3, now, testReset, false).IsZero())
+	// Quiet nights: 21 h 20 min of active time from Tue 14:00 is 10 h to midnight, then
+	// 11 h 20 min from Wed 09:00: Wed 20:20.
+	gtest.Eq(RunOutAtRate(64, 3, now, testReset, true).In(time.UTC), testHour(106+20.0/60))
+	gtest.Eq(RunOutAtRate(0, 3, now, testReset, false), now)
+}

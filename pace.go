@@ -199,6 +199,41 @@ func ActiveTime(from, to time.Time, night bool) time.Duration {
 	return out
 }
 
+// When `left` % runs out at `rate` % per active hour; zero when it lasts until `reset`.
+func RunOutAtRate(left, rate float64, now, reset time.Time, night bool) time.Time {
+	if left <= 0 {
+		return now
+	}
+	if rate <= 0 {
+		return time.Time{}
+	}
+	need := time.Duration(left / rate * float64(time.Hour))
+	if ActiveTime(now, reset, night) <= need {
+		return time.Time{}
+	}
+	return AddActive(now, need, night).Round(time.Minute)
+}
+
+// The moment `active` of active time after `from`.
+func AddActive(from time.Time, active time.Duration, night bool) time.Time {
+	if !night {
+		return from.Add(active)
+	}
+	at := from
+	for {
+		y, m, d := at.Date()
+		awake := time.Date(y, m, d, NightEnd, 0, 0, 0, at.Location())
+		next := time.Date(y, m, d+1, 0, 0, 0, 0, at.Location())
+		at = maxTime(at, awake)
+		if room := next.Sub(at); room >= active {
+			return at.Add(active)
+		} else {
+			active -= room
+		}
+		at = next
+	}
+}
+
 func (self Schedule) ActivePerDay() time.Duration {
 	if self.Night {
 		return Day - NightEnd*time.Hour

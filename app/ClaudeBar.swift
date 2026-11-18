@@ -58,6 +58,8 @@ struct LimitView: Decodable {
     var runOutAt: Int64 = 0
     var perDay: Double = 0
     var level: Level = .unknown
+    var rate: Double = 0
+    var rateRunOut: Int64 = 0
 }
 
 struct ModelView: Decodable, Identifiable {
@@ -317,14 +319,19 @@ struct Panel: View {
 struct Header: View {
     var snap: Snapshot
 
+    private var stale: Bool {
+        snap.updatedAt > 0 && Date().timeIntervalSince1970 - TimeInterval(snap.updatedAt) > 3600
+    }
+
     var body: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Claude usage")
                     .font(.system(size: 15, weight: .semibold))
+                // Data older than an hour: the age in red, the numbers below may be stale.
                 Text(snap.updatedAt > 0 ? "Updated \(ago(snap.updatedAt))" : "No data yet")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12, weight: stale ? .semibold : .regular))
+                    .foregroundStyle(stale ? Color(nsColor: .systemRed) : Color.secondary)
             }
             Spacer()
             if snap.level.alarming || (snap.week.has && snap.week.left <= 0) {
@@ -369,11 +376,9 @@ struct Limits: View {
                     Text(budgetLine)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                    if let forecast {
-                        Text(forecast)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(snap.week.level.textColor)
-                    }
+                    Text(rateLine)
+                        .font(.system(size: 12, weight: rateLevel.alarming ? .medium : .regular))
+                        .foregroundStyle(rateLevel.alarming ? rateLevel.textColor : Color.secondary)
                 }
                 .monospacedDigit()
             }
@@ -390,12 +395,21 @@ struct Limits: View {
         }
     }
 
-    // "Runs out Fri 00:21 even at the daily budget", only on yellow and red.
-    private var forecast: String? {
+    // "At 3%/h now: runs out Thu 15:20" — the current rate (last 2 h) carried forward.
+    private var rateLine: String {
         let week = snap.week
-        guard week.level.alarming, week.runOutAt > 0 else { return nil }
         if week.left <= 0 { return "Limit reached until the reset" }
-        return "Runs out \(when(week.runOutAt)) even at the daily budget"
+        let rate = week.rate < 0.1 ? "<0.1%/h" : String(format: "%.1f%%/h", week.rate)
+        if week.rateRunOut == 0 { return "At \(rate) now: lasts until the reset" }
+        return "At \(rate) now: runs out \(when(week.rateRunOut))"
+    }
+
+    // Yellow when the current rate runs out before the reset, red when more than a day early.
+    private var rateLevel: Level {
+        let week = snap.week
+        if week.left <= 0 { return .bad }
+        guard week.rateRunOut > 0 else { return .ok }
+        return week.resetsAt - week.rateRunOut > 86400 ? .bad : .soon
     }
 
     // "Used 28% · 9% over budget · 13% a day": usage, against what the budget allows by
