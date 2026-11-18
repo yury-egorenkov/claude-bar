@@ -78,7 +78,7 @@ Claude Code status line ───────┘
 
 Two sources. Within one window usage only grows, so where they disagree by a point (rounding, a reply not sent yet) the larger value is used:
 
-1. **Usage API**: the endpoint Claude Code itself calls (`api.anthropic.com/api/oauth/usage`). It returns weekly, per-model and 5-hour limits, including usage from claude.ai. It is asked at most every 2 minutes, in the background. The token is Claude Code's OAuth token, from `.credentials.json` in the Claude config dirs (Claude Code on Linux) or the macOS Keychain (Claude Code on the Mac). It is only read, never refreshed: refreshing rotates the refresh token and would log Claude Code out, so an expired token waits until Claude Code renews it.
+1. **Usage API**: the endpoint Claude Code itself calls (`api.anthropic.com/api/oauth/usage`). It returns weekly, per-model and 5-hour limits, including usage from claude.ai. It is asked at most every 2 minutes, in the background. The token is Claude Code's OAuth token, from `.credentials.json` in the Claude config dirs (`~/.claude`, the folders in `~/.config/claudebar/dirs`, and `claude/` folders of projects under `~/Projects`), the one that expires last, or the macOS Keychain (Claude Code on the Mac). It is only read, never refreshed: refreshing rotates the refresh token and would log Claude Code out, so an expired token waits until Claude Code renews it.
 2. **Status line**: the `rate_limits` field that Claude Code passes to the status line command after each reply. No token involved.
 
 | Part | What it does |
@@ -117,10 +117,11 @@ Optional: click the badge → **Connect to Claude Code** (shown when no login is
 
 ### Claude Code in a container
 
-If Claude Code runs in a Linux container whose `~/.claude` is a folder on the Mac:
+If Claude Code runs in Linux containers whose `~/.claude` is a folder on the Mac (for example `<project>/claude`):
 
-1. Inside the container, in this folder: `make container`. Builds the Linux helper into the container's `~/.claude/bin/` and connects its status line.
-2. On the Mac: `make install CLAUDE_DIR=/path/to/that/folder`. Writes the folder to `~/.config/claudebar/dirs`; the app then reads its `claudebar.json` and `.credentials.json` too.
+- **Found automatically:** every `claude/` folder with a login (`.credentials.json`) or status line data (`claudebar.json`) in projects under `~/Projects`, up to 3 levels deep. Each container renews only its own token and only while it runs; the app takes the freshest token and the freshest data across all of them, so it keeps updating whichever project you work in.
+- **Other places:** `make install CLAUDE_DIR=/path/to/that/folder` adds a folder to `~/.config/claudebar/dirs`.
+- **Status line in a container (optional):** inside the container, in this folder, `make container` builds the Linux helper into the container's `~/.claude/bin/` and connects its status line. The usage API alone is enough; the status line adds updates right after each reply.
 
 ## Make targets
 

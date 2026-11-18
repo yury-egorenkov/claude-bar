@@ -28,23 +28,54 @@ func StatePath() string { return filepath.Join(ClaudeDir(), "claudebar.json") }
 
 func ClaudeDir() string { return filepath.Join(gg.Try1(os.UserHomeDir()), ".claude") }
 
-// Claude Code config dirs the app reads: ~/.claude plus one dir per line of
-// ~/.config/claudebar/dirs, e.g. the folder a Claude Code container mounts as its
-// ~/.claude (`make install CLAUDE_DIR=...` writes it).
+// Claude Code config dirs the app reads: ~/.claude, one dir per line of
+// ~/.config/claudebar/dirs (`make install CLAUDE_DIR=...`), and every `claude/` folder
+// with a login in projects under ~/Projects (up to 3 levels deep): Claude Code in a
+// container keeps its ~/.claude there. Each container renews only its own token, and
+// only while it runs, so the app takes the freshest token and data across all of them.
 func ClaudeDirs() []string {
 	out := []string{ClaudeDir()}
-	body, err := os.ReadFile(DirsConfigPath())
-	if os.IsNotExist(err) {
-		return out
+	add := func(dir string) {
+		if dir != "" && !slices.Contains(out, dir) {
+			out = append(out, dir)
+		}
 	}
-	gg.Try(err)
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !slices.Contains(out, line) {
-			out = append(out, line)
+
+	body, err := os.ReadFile(DirsConfigPath())
+	if !os.IsNotExist(err) {
+		gg.Try(err)
+		for _, line := range strings.Split(string(body), "\n") {
+			add(strings.TrimSpace(line))
+		}
+	}
+
+	for _, dir := range ProjectClaudeDirs(filepath.Join(gg.Try1(os.UserHomeDir()), "Projects")) {
+		add(dir)
+	}
+	return out
+}
+
+// `claude/` folders holding a Claude Code login or status line data, 1 to 3 levels
+// below `root`: root/x/claude, root/x/y/claude, root/x/y/z/claude.
+func ProjectClaudeDirs(root string) []string {
+	var out []string
+	for _, pattern := range []string{"*/claude", "*/*/claude", "*/*/*/claude"} {
+		for _, dir := range gg.Try1(filepath.Glob(filepath.Join(root, pattern))) {
+			if exists(filepath.Join(dir, ".credentials.json")) || exists(filepath.Join(dir, "claudebar.json")) {
+				out = append(out, dir)
+			}
 		}
 	}
 	return out
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
+	}
+	gg.Try(err)
+	return true
 }
 
 func DirsConfigPath() string {

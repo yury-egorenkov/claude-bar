@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mitranim/gg"
 	"github.com/mitranim/gg/gtest"
 )
 
@@ -83,4 +85,36 @@ func TestBestToken(t *testing.T) {
 
 	// The token never shows up in formatted errors.
 	gtest.False(strings.Contains(fmt.Sprint(cred("secret", now)), "secret"))
+}
+
+func TestProjectClaudeDirs(t *testing.T) {
+	defer gtest.Catch(t)
+
+	root := t.TempDir()
+	write := func(path string) {
+		gg.Try(os.MkdirAll(filepath.Dir(path), 0o700))
+		gg.Try(os.WriteFile(path, []byte(`{}`), 0o600))
+	}
+	write(filepath.Join(root, "site", "claude", ".credentials.json"))
+	write(filepath.Join(root, "ai", "platform", "claude", "claudebar.json"))
+	write(filepath.Join(root, "ai", "deep", "app", "claude", ".credentials.json"))
+	write(filepath.Join(root, "empty", "claude", "notes.txt"))                    // no login, no data: skipped
+	write(filepath.Join(root, "a", "b", "c", "d", "claude", ".credentials.json")) // too deep
+
+	gtest.Equal(ProjectClaudeDirs(root), []string{
+		filepath.Join(root, "site", "claude"),
+		filepath.Join(root, "ai", "platform", "claude"),
+		filepath.Join(root, "ai", "deep", "app", "claude"),
+	})
+}
+
+func TestBestToken_freshest(t *testing.T) {
+	defer gtest.Catch(t)
+
+	// One container idle since yesterday, another running: the running one's token wins.
+	now := time.Date(2026, 11, 18, 10, 50, 0, 0, time.UTC)
+	var idle, running Credentials
+	idle.ClaudeAiOauth.AccessToken, idle.ClaudeAiOauth.ExpiresAt = "idle", now.Add(-34*time.Hour).UnixMilli()
+	running.ClaudeAiOauth.AccessToken, running.ClaudeAiOauth.ExpiresAt = "running", now.Add(8*time.Hour).UnixMilli()
+	gtest.Eq(BestToken([]Credentials{idle, running}, now), "running")
 }
