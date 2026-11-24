@@ -92,8 +92,8 @@ type Pace struct {
 //     hours (all day, or 09–24 with quiet nights). Yellow once more than AheadMargin
 //     day ahead; red more than a day ahead. Keeping to the schedule from now on, the
 //     limit runs out at RunOut.
-//   - days: today is the day labeled with today's date; on budget while usage stays
-//     within the tokens up to the end of today. Yellow once tomorrow's tokens are
+//   - days: today is the day (24 h from the reset time) holding now; on budget while
+//     usage stays within the tokens up to the end of today. Yellow once tomorrow's tokens are
 //     touched, red more than a day beyond today.
 func WeekPace(win Window, now time.Time, conf Config) Pace {
 	if !win.Live(now) {
@@ -106,7 +106,7 @@ func WeekPace(win Window, now time.Time, conf Config) Pace {
 	out := Pace{Used: win.Used, Reset: reset}
 	margin := 0.0
 	if conf.Pace == PaceDays {
-		today := calendarDays(sched.Days[0][0], now)
+		today := min(6, int(now.Sub(sched.Days[0][0])/Day))
 		out.Even = math.Min(100, float64(today+1)*budget)
 	} else {
 		out.Even = sched.At(now)
@@ -130,15 +130,6 @@ func WeekPace(win Window, now time.Time, conf Config) Pace {
 	}
 	out.Level = WeekLevel(out.Ahead, out.Left(), margin)
 	return out
-}
-
-// Calendar days from the date of `from` to the date of `to`, in the location of `to`.
-func calendarDays(from, to time.Time) int {
-	y1, m1, d1 := from.In(to.Location()).Date()
-	y2, m2, d2 := to.Date()
-	one := time.Date(y1, m1, d1, 0, 0, 0, 0, time.UTC)
-	two := time.Date(y2, m2, d2, 0, 0, 0, 0, time.UTC)
-	return int(two.Sub(one) / Day)
 }
 
 // Up to `margin` day ahead: as usual. Beyond: yellow. More than a day ahead, or under

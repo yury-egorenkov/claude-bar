@@ -8,18 +8,18 @@ Made by [egorsky.com](https://egorsky.com). MIT License.
 
 ## Menu bar
 
-A rounded rect with the weekly % left inside. Its color shows how far usage is ahead of the week's budget, counted in days (one day = 100/7 % of the week). Two ways to count, chosen in the panel:
+A rounded rect with the weekly % left inside. Its color shows how far usage is ahead of the week's budget, counted in days (one day = 100/7 % of the week). Two ways to count, chosen in Settings:
 
 | | Pace by hours (default) | Pace by days |
 |---|---|---|
-| Expected usage | grows with the clock, evenly over the week's hours | the tokens up to the end of today (the cell with today's date) |
+| Expected usage | grows with the clock, evenly over the week's hours | the tokens up to the end of today (the current day, from the reset time) |
 | Outline, system color | at most 0.15 day ahead | within today's tokens |
 | Yellow | more than 0.15 day ahead, up to 1 day | tomorrow's tokens started |
 | Red | more than 1 day ahead | more than a full day beyond today |
 
-Red also when under 10% is left; `–` means no data yet. Under the weekly cells, one line in % of the weekly limit: used so far, how much over or under the budget for this moment, and how much per day the rest allows until the reset. A second line carries the current rate forward: the % of the week per hour over the last 2 hours (the week's average while the history is shorter than 15 min), and when the limit runs out at that rate. Yellow when that is before the reset, red when more than a day before; quiet nights are skipped.
+Red also when under 10% is left; `–` means no data yet. Under the weekly cells, one line in % of the weekly limit: used so far, how much over or under the budget for this moment, and how much per day the rest allows until the reset. A second line, in red, appears only when the current rate runs the limit out more than a day before the reset: the % of the week per hour over the last 2 hours (the week's average while the history is shorter than 15 min) and when it runs out at that rate; quiet nights are skipped.
 
-**Quiet nights 00–09** (a panel setting, off by default): the hours 00:00–09:00 hold no budget. Expected usage stands still at night. The green line stays the plain clock. Every 24 hours still hold 15 active hours, so the day cells keep 100/7 % each.
+**Quiet nights 00–09** (Settings, off by default): the hours 00:00–09:00 hold no budget. Expected usage stands still at night. The green line stays the plain clock. Every 24 hours still hold 15 active hours, so the day cells keep 100/7 % each.
 
 The 5-hour window has its own rule (yellow when at its current rate it runs out before its reset, red when more than 43 min early); the worse of the two wins.
 
@@ -37,19 +37,15 @@ Weekly · all models         62% left · Resets 3d
 [ 0% ] [ 0% ] [ 9% ] [14% ] [14% ] [14% ] [14% ]  tokens left per day, % of the week
                ▔▔▔▔   ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  ▔▔▔▔▔  green: time left of the day
 Used 38% · 9% over budget · 15% a day
-At 3.0%/h now: runs out Thu 15:20                 (yellow/red when before the reset)
+At 3.0%/h now: runs out Thu 15:20                 (only when over a day early, in red)
 Weekly · Fable             100% left · Resets 3d
  Sat    Sun    Mon    Tue    Wed    Thu    Fri
 [14% ] [14% ] [14% ] [14% ] [14% ] [14% ] [14% ]
 5-hour session              76% left · Resets 2h
 [░░░░░░██████████████████]
 ────────────────────────────────────────────
-🕒 Pace by hours                            ✓
-📅 Pace by days
-🌙 Quiet nights 00–09
-────────────────────────────────────────────
 ↻  Refresh
-⏻  Start at Login                           ✓
+⚙  Settings…
 ────────────────────────────────────────────
 🌐 ClaudeBar by egorsky.com
 ⊗  Quit ClaudeBar
@@ -57,16 +53,28 @@ Weekly · Fable             100% left · Resets 3d
 
 Weekly limits (all models and each model) show a 7-day strip instead of a bar; the 5-hour window keeps a bar. Both show what is left at the right end; the spent part grows from the left, like time through the week.
 
+When the limit is reached, the badge shows the time to the reset (`2h 55m`, `2d 4h`) instead of 0%, and the panel a live countdown: `Resets in 2:54:10`.
+
+**Limit resets** (Settings → Resets). The resets the account can use ("Reset for free" in the Claude app): a weekly reset clears the week, a Fable reset gives back what Fable used. They are read with the request Claude Code makes (`/api/oauth/usage?cedar_ember=1`) at most once an hour, since Anthropic rate-limits it. **Reset** asks for a confirmation, then uses one (`POST /api/organizations/<org>/reset_rate_limits`) and reads the usage again.
+
+**Emergency stop: log out everywhere** (Settings → Protection). Revokes every Claude Code login ClaudeBar can see, the way Claude Code's own `/logout` does (`POST https://platform.claude.com/v1/oauth/token/revoke`, refresh and access token): the `claude/` folders of your projects and the Keychain. Every container using those logins loses access at once and needs `/login` again. Logins made separately on servers are not visible to ClaudeBar and stay active. A warning with the number of logins comes first; the result comes as a macOS notification ("Emergency stop: logged out: 3 of 3 logins revoked").
+
+**Auto stop when running out** (Settings → Protection, off by default): the same logout, without a warning, when the current rate runs the weekly limit out more than a day before the reset and that holds for 10 minutes in a row. While it counts, the panel header shows `Auto stop in 6:12`; if the rate drops, it disarms. It fires at most once per weekly window and reports the result in a macOS notification.
+
+When the usage API refuses the token (HTTP 401: the login was revoked or ended elsewhere), a notification says so once: "Claude Code is logged out. Run /login".
+
 ### Days
 
 Each cell is labeled with a weekday and has two measures, independent of each other:
 
 - **Blue: tokens.** The week is 7 days of 24 hours counted from the reset time (a reset on Saturday at 14:00 gives Sat 14:00 → Sun 14:00, Sun 14:00 → Mon 14:00, and so on); each holds 100/7 ≈ 14.3% of the week. Usage consumes them in order, whatever the date: unspent budget of a past day stays in that day until usage reaches it. The number inside is the tokens left in that day, in % of the week: a full day shows 14%, and the cells add up to the week's % left.
-- **Green: the clock.** The thin line under each cell is the time left of its calendar date, midnight to midnight, and nothing else: at 22:00, today's line has 2 of 24 hours left. No setting changes it. Past dates are empty, future ones full. Today's name is bold and switches at midnight.
+- **Green: the clock.** The thin line under each cell is the time left of its calendar date, midnight to midnight, and nothing else: at 22:00, today's line has 2 of 24 hours left. No setting changes it. Today's name is bold and switches at midnight.
 
 Both keep what is left at the right end. Used tokens beyond what the budget allows by now (the pace setting decides: by the hours, or up to the end of today) are orange, next to the blue: the same overspend as "over budget" in the line below and the color of the badge. Hover a cell for its budget and the actual spend on that date.
 
-The cells need only the current percentage. For the actual spend per calendar date (the hover) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
+The cells need only the current percentage. For the actual spend per day (the hover) the app keeps a history: every fetch appends `{at, limit, used, resets_at}` to `~/.config/claudebar/history.jsonl` for all models and for each model limit (kept for 8 days). A day's spend is the difference between the last samples at its start and at its end. Nothing is sampled while the Mac is off; that spend lands on the day the Mac is back.
+
+**Settings…** closes the panel and opens a settings window in the middle of the screen, in tabs: **Budget** (by hours or by days, quiet nights), **Resets** (limit resets with their Reset buttons), **Protection** (emergency stop, auto stop), **General** (Start at Login).
 
 ## How it works
 
@@ -84,7 +92,9 @@ Two sources. Within one window usage only grows, so where they disagree by a poi
 | Part | What it does |
 |------|--------------|
 | `ClaudeBar` (SwiftUI, `app/ClaudeBar.swift`) | runs `claudebar-cli json` every 20 s and when the panel opens; draws the badge and the panel. Rendering only |
-| `claudebar-cli set` (Go) | settings from the panel: `set pace hours\|days`, `set night on\|off`, kept in `~/.config/claudebar/config.json` |
+| `claudebar-cli logout-all` (Go) | emergency stop: revokes every login found (`--count` only counts them, `--auto` is the auto stop with a notification) |
+| `claudebar-cli reset ID` (Go) | uses one limit reset (the Reset button in Settings, after a confirmation) |
+| `claudebar-cli set` (Go) | settings from the panel: `set pace hours\|days`, `set night on\|off`, `set auto-stop on\|off`, kept in `~/.config/claudebar/config.json` |
 | `claudebar-cli json` (Go) | pace, forecast, daily budget, levels, days: everything the app shows. Starts `claudebar-cli fetch` in the background when the API result is older than 2 min |
 | `claudebar-cli fetch` (Go) | one usage API request. Result in `~/.config/claudebar/usage.json`, error in `usage-error.txt`, a weekly sample appended to `history.jsonl` |
 | `claudebar-cli statusline` (Go) | status line command: keeps only `rate_limits`, writes `~/.claude/claudebar.json` (mode 600). Prints a line only when a limit runs out before its reset (`week 25% left · runs out Thu 02:00 · slow down`), otherwise nothing |
@@ -96,7 +106,7 @@ All math is in Go and covered by tests. Both binaries live in `ClaudeBar.app/Con
 | Check | Result |
 |-------|--------|
 | Claude Code token | read from `.credentials.json` or the Keychain; sent only to `api.anthropic.com` (the one URL in the code, `UsageURL` in `usage.go`); never written anywhere, never refreshed, never printed in errors |
-| Network | one request every 2 minutes or less to `api.anthropic.com`. No analytics, no update checks, no other hosts. The Swift app makes no requests |
+| Network | `api.anthropic.com` only: usage every 2 minutes or less, limit resets once an hour, a reset only when you click Reset and confirm, and token revocation at `platform.claude.com` only on the emergency stop. No analytics, no update checks, no other hosts. The Swift app makes no requests |
 | Files it writes | `~/.claude/claudebar.json`, `~/.config/claudebar/usage.json`, `history.jsonl`: percentages, reset times, model names, timestamps. No token. Paths, session text and `transcript_path` from the status line input are discarded while parsing |
 | External programs | `/usr/bin/security` (Keychain, only when no live token is found in files); `/bin/sh` only with `statusline -then` (your previous status line command) |
 | What it changes | `~/.claude/settings.json` only via the Connect button, after a backup to `settings.json.claudebar-backup`; the login item only via Start at Login |

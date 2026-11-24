@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"time"
 )
@@ -18,6 +19,9 @@ type Snapshot struct {
 	Days      []DayView   `json:"days"`   // the 7 days of the weekly window, spend per day
 	Error     string      `json:"error"`  // last usage API error; data may still come from the status line
 	Config    Config      `json:"config"` // settings, for the menu checkmarks
+	Resets    []Grant     `json:"resets"` // limit resets with one left
+	// Auto stop armed: when it fires unless the rate drops (epoch seconds); 0: not armed.
+	AutoStopAt int64 `json:"auto_stop_at"`
 }
 
 type ModelView struct {
@@ -60,8 +64,13 @@ func MakeSnapshot(state State, connected bool, now time.Time, conf Config) Snaps
 	if bar.Level == LevelUnknown {
 		out.Badge = "–"
 	}
+	// Limit reached: the badge counts down to the reset instead of showing 0%.
+	if week := lim.SevenDay; week.Live(now) && week.Used >= 100 {
+		out.Badge = Countdown(week.Reset().Sub(now))
+	}
 	out.Models = []ModelView{}
 	out.Days = []DayView{}
+	out.Resets = []Grant{}
 	for _, model := range state.Models {
 		if model.Window.Live(now) {
 			out.Models = append(out.Models, ModelView{Name: model.Name, Left: math.Max(0, 100-model.Window.Used), ResetsAt: model.Window.ResetsAt, Days: []DayView{}})
@@ -92,4 +101,17 @@ func makeView(pace Pace) View {
 		out.RunOutAt = pace.RunOut.Unix()
 	}
 	return out
+}
+
+// "2d 4h", "5h 12m", "54m".
+func Countdown(left time.Duration) string {
+	mins := int(math.Ceil(max(0, left.Minutes())))
+	switch {
+	case mins >= 24*60:
+		return fmt.Sprintf("%dd %dh", mins/(24*60), mins%(24*60)/60)
+	case mins >= 60:
+		return fmt.Sprintf("%dh %dm", mins/60, mins%60)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
 }

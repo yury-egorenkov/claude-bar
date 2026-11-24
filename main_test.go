@@ -38,8 +38,6 @@ func TestWeekSchedule(t *testing.T) {
 	gtest.Eq(len(sched.Days), 7)
 	gtest.Eq(sched.Days[1], [2]time.Time{testHour(24), testHour(48)})
 	gtest.Eq(sched.Budget(), testBudget)
-	gtest.Eq(calendarDays(testHour(0), testHour(84)), 3)  // Sat 14 → Tue 17
-	gtest.Eq(calendarDays(testHour(0), testHour(166)), 7) // Sat 21 08:00, before the reset
 }
 
 // Tue 17.11 22:00: today is the 4th day, tokens up to the end of today are 4/7 = 57.1%.
@@ -188,9 +186,10 @@ func TestMakeSnapshot(t *testing.T) {
 		Models:   []ModelView{},
 		Days:     []DayView{},
 		Config:   testDays,
+		Resets:   []Grant{},
 	})
 
-	gtest.Equal(MakeSnapshot(State{}, false, now, testDays), Snapshot{Badge: "–", Models: []ModelView{}, Days: []DayView{}, Config: testDays})
+	gtest.Equal(MakeSnapshot(State{}, false, now, testDays), Snapshot{Badge: "–", Models: []ModelView{}, Days: []DayView{}, Config: testDays, Resets: []Grant{}})
 	gtest.Eq(string(gg.JsonBytes(LevelSoon)), `"soon"`)
 }
 
@@ -391,7 +390,7 @@ func TestWeekPace_night(t *testing.T) {
 func TestWeekDays_clock(t *testing.T) {
 	defer gtest.Catch(t)
 
-	// Tue 17.11 14:00: 10 of today's 24 h are left, with or without quiet nights.
+	// Tue 17.11 14:00: 10 of the calendar day's 24 h left, with or without quiet nights.
 	plain := WeekDays(nil, "", testWeek(31), testHour(76), Config{})
 	night := WeekDays(nil, "", testWeek(31), testHour(76), Config{Night: true})
 	gtest.Eq(plain[3].State, DayToday)
@@ -435,4 +434,32 @@ func TestRunOutAtRate(t *testing.T) {
 	// 11 h 20 min from Wed 09:00: Wed 20:20.
 	gtest.Eq(RunOutAtRate(64, 3, now, testReset, true).In(time.UTC), testHour(106+20.0/60))
 	gtest.Eq(RunOutAtRate(0, 3, now, testReset, false), now)
+}
+
+func TestCountdown(t *testing.T) {
+	defer gtest.Catch(t)
+
+	gtest.Eq(Countdown(52*time.Hour+10*time.Minute), "2d 4h")
+	gtest.Eq(Countdown(2*time.Hour+54*time.Minute+10*time.Second), "2h 55m")
+	gtest.Eq(Countdown(54*time.Minute), "54m")
+	gtest.Eq(Countdown(-time.Minute), "0m")
+
+	// Limit reached: the badge counts down instead of 0%.
+	snap := MakeSnapshot(State{Limits: Limits{SevenDay: testWeek(100)}}, true, testHour(165), testDays)
+	gtest.Eq(snap.Badge, "3h 0m")
+}
+
+func TestParseGrants(t *testing.T) {
+	defer gtest.Catch(t)
+
+	grants := ParseGrants([]byte(`{"seven_day":{"utilization":1},"cedar_ember":{"eligible":true,"grants":[
+		{"id":"full-reset-2611","label":"One full limit reset","resets_left":1,"ends_at":"2026-12-10T22:00:00+00:00","usable_now":true,"type":"weekly","gives_back_weekly":false},
+		{"id":"used-up","label":"Old","resets_left":0,"ends_at":"2026-12-10T22:00:00+00:00","usable_now":false,"type":"full"}]}}`))
+	gtest.True(grants.Eligible)
+	gtest.Eq(len(grants.List), 2)
+	gtest.Equal(grants.Available(), []Grant{{
+		ID: "full-reset-2611", Label: "One full limit reset", Type: "weekly", Left: 1,
+		EndsAt: time.Date(2026, 12, 10, 22, 0, 0, 0, time.FixedZone("", 0)), UsableNow: true,
+	}})
+	gtest.Eq(len(newUUID()), 36)
 }

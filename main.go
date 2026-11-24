@@ -29,7 +29,10 @@ const usage = `claudebar <command>
   json        snapshot for the ClaudeBar app: limits left, pace, forecast;
               starts "fetch" in the background when the API result is older than 2 min
   fetch       one request to the usage API with the Claude Code token (api.anthropic.com only)
-  set         settings: set pace hours|days, set night on|off (quiet nights 00–09)
+  logout-all  emergency stop: revoke every Claude Code login found (--count: only count)
+  reset ID    use one limit reset (the Reset button in Settings, after a confirmation)
+  set         settings: set pace hours|days, set night on|off (quiet nights 00–09),
+              set auto-stop on|off
   connect     add statusLine to ~/.claude/settings.json (backup: settings.json.claudebar-backup)
   show        limits and pace as text (check without the menu bar)`
 
@@ -49,6 +52,20 @@ func main() {
 		RunFetch()
 	case "connect":
 		Connect(SettingsPath(), Executable())
+	case "logout-all":
+		switch {
+		case len(args) == 1 && args[0] == "--count":
+			RunLogoutAll(true, "")
+		case len(args) == 1 && args[0] == "--auto":
+			RunAutoStop()
+		default:
+			RunLogoutAll(false, "Emergency stop")
+		}
+	case "reset":
+		if len(args) != 1 {
+			panic(gg.Errf("usage: claudebar-cli reset <grant id>"))
+		}
+		RunReset(args[0])
 	case "set":
 		if len(args) != 2 {
 			panic(gg.Errf("usage: claudebar-cli set pace hours|days, or set night on|off"))
@@ -151,11 +168,20 @@ func runJson(now time.Time) Snapshot {
 		if at := RunOutAtRate(snap.Week.Left, snap.Week.Rate, now, week.Reset(), conf.Night); !at.IsZero() {
 			snap.Week.RateRunOut = at.Unix()
 		}
+		state, fire, at := AutoStopStep(ReadAutoStop(), conf, week.ResetsAt, snap.Week.RateRunOut, now)
+		WriteAutoStop(state)
+		if !at.IsZero() && !fire {
+			snap.AutoStopAt = at.Unix()
+		}
+		if fire {
+			StartAutoStop()
+		}
 	}
 	snap.Days = WeekDays(history, "", state.Limits.SevenDay, now, conf)
 	for ind, model := range snap.Models {
 		snap.Models[ind].Days = WeekDays(history, model.Name, model.Window(), now, conf)
 	}
+	snap.Resets = ReadGrants().Available()
 	snap.Error = ReadUsageErr()
 	if fetchErr != nil {
 		snap.Error = fetchErr.Error()

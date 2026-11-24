@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,4 +120,75 @@ func TestBestToken_freshest(t *testing.T) {
 	idle.ClaudeAiOauth.AccessToken, idle.ClaudeAiOauth.ExpiresAt = "idle", now.Add(-34*time.Hour).UnixMilli()
 	running.ClaudeAiOauth.AccessToken, running.ClaudeAiOauth.ExpiresAt = "running", now.Add(8*time.Hour).UnixMilli()
 	gtest.Eq(BestToken([]Credentials{idle, running}, now), "running")
+}
+
+func TestUniqueLogins(t *testing.T) {
+	defer gtest.Catch(t)
+
+	login := func(access, refresh string) Credentials {
+		var out Credentials
+		out.ClaudeAiOauth.AccessToken, out.ClaudeAiOauth.RefreshToken = access, refresh
+		return out
+	}
+	// The same login copied into two containers, another login, an empty file.
+	got := UniqueLogins([]Credentials{login("a1", "r1"), login("a1", "r1"), login("a2", "r2"), {}})
+	gtest.Eq(len(got), 2)
+}
+
+func TestRevokeLogin(t *testing.T) {
+	defer gtest.Catch(t)
+
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		body := gg.Try1(io.ReadAll(req.Body))
+		bodies = append(bodies, string(body))
+	}))
+	defer server.Close()
+
+	var cred Credentials
+	cred.ClaudeAiOauth.AccessToken, cred.ClaudeAiOauth.RefreshToken = "acc", "ref"
+	RevokeLogin(server.URL, cred)
+	gtest.Equal(bodies, []string{
+		`{"client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","token":"ref","token_type_hint":"refresh_token"}`,
+		`{"client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","token":"acc","token_type_hint":"access_token"}`,
+	})
+
+	failing := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) { rw.WriteHeader(400) }))
+	defer failing.Close()
+	gtest.PanicStr("HTTP 400", func() { RevokeLogin(failing.URL, cred) })
+}
+
+func TestAutoStopStep(t *testing.T) {
+	defer gtest.Catch(t)
+
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(3 * Day).Unix()
+	early := now.Add(time.Hour).Unix() // runs out ~3 days early
+	on := Config{AutoStop: true}
+
+	// Off: never armed.
+	state, fire, at := AutoStopStep(AutoStopState{}, Config{}, reset, early, now)
+	gtest.False(fire)
+	gtest.True(at.IsZero())
+
+	// On: armed now, fires 10 min later.
+	state, fire, at = AutoStopStep(AutoStopState{}, on, reset, early, now)
+	gtest.False(fire)
+	gtest.True(at.Equal(now.Add(AutoStopAfter)))
+	state, fire, _ = AutoStopStep(state, on, reset, early, now.Add(9*time.Minute))
+	gtest.False(fire)
+	state, fire, _ = AutoStopStep(state, on, reset, early, now.Add(10*time.Minute))
+	gtest.True(fire)
+	// Once per window.
+	_, fire, _ = AutoStopStep(state, on, reset, early, now.Add(20*time.Minute))
+	gtest.False(fire)
+
+	// The rate drops before 10 min: disarmed, the count starts over.
+	state, _, _ = AutoStopStep(AutoStopState{}, on, reset, early, now)
+	state, _, _ = AutoStopStep(state, on, reset, 0, now.Add(5*time.Minute))
+	gtest.Eq(state.Since, int64(0))
+
+	// Less than a day early: not armed.
+	_, _, at = AutoStopStep(AutoStopState{}, on, reset, now.Add(2*Day+time.Hour).Unix(), now)
+	gtest.True(at.IsZero())
 }

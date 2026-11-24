@@ -80,15 +80,15 @@ var dayStateNames = [...]string{"past", "today", "future"}
 
 func (self DayState) MarshalText() ([]byte, error) { return []byte(dayStateNames[self]), nil }
 
-// One day of the weekly window, labeled by the calendar date it starts on.
+// One day of the weekly window: 24 h from the reset time, labeled by the weekday it starts on.
 //
 // Two independent measures per day:
 //   - Left: tokens. 24 h from the reset time (14:00 to 14:00 for a reset at 14:00),
 //     100/7 % of the week each. Usage consumes the days in order, whatever the date:
 //     unspent budget of a past day stays in that day until usage reaches it.
 //   - TimeLeft: the clock, nothing computed: the share of the labeled calendar date still
-//     ahead, midnight to midnight, whatever the settings. 0 for past dates, 1 for future
-//     ones. State (today = bold) follows it.
+//     ahead, midnight to midnight, whatever the settings. State (today = bold) and the
+//     per-day spend follow it.
 type DayView struct {
 	Start    int64    `json:"start"` // epoch seconds, inside the window
 	End      int64    `json:"end"`

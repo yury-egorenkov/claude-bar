@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -75,7 +76,8 @@ func RunFetch() {
 
 	err := gg.Catch(func() {
 		now := time.Now()
-		state := FetchUsage(ReadToken(ClaudeDirs(), now))
+		token := ReadToken(ClaudeDirs(), now)
+		state := FetchUsage(token)
 		state.CapturedAt = now
 		WriteState(UsagePath(), state)
 		var samples []Sample
@@ -86,8 +88,13 @@ func RunFetch() {
 			samples = append(samples, Sample{At: now.Unix(), Limit: model.Name, Used: model.Window.Used, ResetsAt: model.Window.ResetsAt})
 		}
 		AppendHistory(HistoryPath(), now, samples...)
+		FetchGrantsIfStale(token, now)
 	})
 	if err != nil {
+		// A login revoked or ended elsewhere: tell once, not on every retry.
+		if strings.Contains(err.Error(), "HTTP 401") && !strings.Contains(ReadUsageErr(), "HTTP 401") {
+			notify("ClaudeBar: Claude Code is logged out", "The usage API refused the token. Run /login in Claude Code.")
+		}
 		gg.Try(os.WriteFile(UsageErrPath(), []byte(err.Error()), 0o600))
 		return
 	}
@@ -108,8 +115,9 @@ func ReadUsageErr() string {
 
 type Credentials struct {
 	ClaudeAiOauth struct {
-		AccessToken string `json:"accessToken"`
-		ExpiresAt   int64  `json:"expiresAt"` // epoch milliseconds
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"` // used only by the emergency logout, to revoke it
+		ExpiresAt    int64  `json:"expiresAt"`    // epoch milliseconds
 	} `json:"claudeAiOauth"`
 }
 
@@ -120,23 +128,40 @@ func (self Credentials) Live(now time.Time) bool {
 // Token with the latest expiry among `.credentials.json` in the Claude dirs
 // (Claude Code on Linux, e.g. in a container) and the macOS Keychain (Claude Code on the Mac).
 func ReadToken(dirs []string, now time.Time) string {
-	var all []Credentials
+	all := ReadCredentials(dirs, false)
+	// The Keychain only when the files have no live token: after every rebuild macOS
+	// asks again whether this helper may read it.
+	if !slices.ContainsFunc(all, func(cred Credentials) bool { return cred.Live(now) }) {
+		all = append(all, keychainLogins()...)
+	}
+	return BestToken(all, now)
+}
+
+// Every Claude Code login in the dirs' `.credentials.json`, plus the Keychain when asked.
+func ReadCredentials(dirs []string, keychain bool) []Credentials {
+	var out []Credentials
 	for _, dir := range dirs {
 		body, err := os.ReadFile(filepath.Join(dir, ".credentials.json"))
 		if os.IsNotExist(err) {
 			continue
 		}
 		gg.Try(err)
-		all = append(all, gg.JsonDecodeTo[Credentials](body))
+		out = append(out, gg.JsonDecodeTo[Credentials](body))
 	}
-	// The Keychain only when the files have no live token: after every rebuild macOS
-	// asks again whether this helper may read it.
-	if runtime.GOOS == "darwin" && !slices.ContainsFunc(all, func(cred Credentials) bool { return cred.Live(now) }) {
-		if body := keychainCredentials(); body != nil {
-			all = append(all, gg.JsonDecodeTo[Credentials](body))
-		}
+	if keychain {
+		out = append(out, keychainLogins()...)
 	}
-	return BestToken(all, now)
+	return out
+}
+
+func keychainLogins() []Credentials {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	if body := keychainCredentials(); body != nil {
+		return []Credentials{gg.JsonDecodeTo[Credentials](body)}
+	}
+	return nil
 }
 
 func BestToken(all []Credentials, now time.Time) string {

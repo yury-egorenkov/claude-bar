@@ -185,6 +185,9 @@ func minTime(one, two time.Time) time.Time {
 type Config struct {
 	Pace  PaceMode `json:"pace"`  // empty: hours
 	Night bool     `json:"night"` // quiet nights: 00:00–09:00 holds no budget
+	// Emergency stop on its own when the current rate runs out the limit more than a day
+	// early for AutoStopAfter in a row.
+	AutoStop bool `json:"auto_stop"`
 }
 
 type PaceMode string
@@ -217,8 +220,10 @@ func SetConfig(conf Config, key, val string) Config {
 		conf.Pace = PaceMode(val)
 	case key == "night" && (val == "on" || val == "off"):
 		conf.Night = val == "on"
+	case key == "auto-stop" && (val == "on" || val == "off"):
+		conf.AutoStop = val == "on"
 	default:
-		panic(gg.Errf("unknown setting %q %q: use pace hours|days or night on|off", key, val))
+		panic(gg.Errf("unknown setting %q %q: use pace hours|days, night on|off or auto-stop on|off", key, val))
 	}
 	return conf
 }

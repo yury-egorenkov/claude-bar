@@ -95,13 +95,27 @@ struct Snapshot: Decodable {
     var models: [ModelView] = []
     var days: [DayView] = []
     var error = ""
-    var config = Settings()
+    var config = AppConfig()
+    var resets: [ResetGrant] = []
+    var autoStopAt: Int64 = 0   // auto stop armed: fires then unless the rate drops
 }
 
-// `config` in the snapshot: pace "hours" (or empty) / "days", quiet nights.
-struct Settings: Decodable {
+// A limit reset the account can use ("Reset for free" in the Claude app).
+struct ResetGrant: Decodable, Identifiable {
+    var id = ""
+    var label = ""
+    var type = ""          // "weekly": clears the week; "full": gives back what Fable used
+    var resetsLeft = 0
+    var endsAt = ""        // RFC 3339
+    var usableNow = false
+    var givesBackWeekly = false
+}
+
+// `config` in the snapshot (not `Settings`: that is the SwiftUI scene): pace "hours" (or empty) / "days", quiet nights.
+struct AppConfig: Decodable {
     var pace = ""
     var night = false
+    var autoStop = false
     var byDays: Bool { pace == "days" }
 }
 
@@ -170,7 +184,73 @@ final class Model: ObservableObject {
 
     // The helper finishes in milliseconds, so it runs on the main thread,
     // with a 5 s limit so a stuck helper can never freeze the menu bar.
-    private func runHelper(_ args: [String]) throws -> Data {
+    // Uses one limit reset after a confirmation. The helper talks to the network, so it
+    // runs off the main thread with a longer limit.
+    @Published var resetting = false
+
+    func reset(_ grant: ResetGrant) {
+        let alert = NSAlert()
+        alert.messageText = "Use this limit reset?"
+        alert.informativeText = "\(grant.label)\n\nIt can't be undone."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        resetting = true
+        DispatchQueue.global().async {
+            let result = Result { try self.runHelper(["reset", grant.id], timeout: 60) }
+            DispatchQueue.main.async {
+                self.resetting = false
+                if case .failure(let error) = result { self.error = "Reset: \(error)" }
+                self.refresh()
+            }
+        }
+    }
+
+    // Emergency stop: revoke every Claude Code login found on this Mac, after a warning
+    // that says how many and what follows.
+    func emergencyStop() {
+        let count: String
+        do {
+            // Reading the Keychain may ask for permission: a long limit.
+            let data = try runHelper(["logout-all", "--count"], timeout: 60)
+            count = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
+        } catch {
+            self.error = "Emergency stop: \(error)"
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Log out everywhere?"
+        alert.informativeText = """
+            Revokes \(count) Claude Code login(s) found on this Mac: the claude/ folders of your projects \
+            and the Keychain. Every container using them stops at once and needs /login again.
+
+            Logins made separately on servers are not visible here and are not touched.
+            """
+        alert.addButton(withTitle: "Log out everywhere")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        DispatchQueue.global().async {
+            let result = Result { try self.runHelper(["logout-all"], timeout: 120) }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let data):
+                    self.error = "Emergency stop: " + (String(data: data, encoding: .utf8) ?? "done")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                case .failure(let error):
+                    self.error = "Emergency stop: \(error)"
+                }
+                self.refresh()
+            }
+        }
+    }
+
+    private func runHelper(_ args: [String], timeout: Double = 5) throws -> Data {
         // The helper must be a separate file, never this app (APFS ignores case:
         // "claudebar" would be "ClaudeBar").
         if let app = Bundle.main.executableURL, sameFile(app, helper) {
@@ -186,9 +266,9 @@ final class Model: ObservableObject {
         let done = DispatchSemaphore(value: 0)
         proc.terminationHandler = { _ in done.signal() }
         try proc.run()
-        if done.wait(timeout: .now() + 5) == .timedOut {
+        if done.wait(timeout: .now() + timeout) == .timedOut {
             proc.terminate()
-            throw HelperError(message: "claudebar-cli \(args.joined(separator: " ")) did not finish in 5 s")
+            throw HelperError(message: "claudebar-cli \(args.joined(separator: " ")) did not finish in \(Int(timeout)) s")
         }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         if proc.terminationStatus != 0 {
@@ -236,6 +316,156 @@ struct ClaudeBarApp: App {
             Image(nsImage: badgeImage(text: model.snapshot.badge, level: model.snapshot.level))
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+// The settings tabs. The window around them is AppKit (SettingsWindow): native
+// preferences tabs, icons with titles in the toolbar.
+struct BudgetTab: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        let conf = model.snapshot.config
+        Form {
+            Picker("Count the budget", selection: Binding(
+                get: { conf.byDays ? "days" : "hours" },
+                set: { model.set("pace", $0) }
+            )) {
+                Text("By hours: even over the week's hours").tag("hours")
+                Text("By days: within today's tokens").tag("days")
+            }
+            .pickerStyle(.radioGroup)
+            Toggle("Quiet nights 00–09: no budget at night", isOn: Binding(
+                get: { conf.night },
+                set: { model.set("night", $0 ? "on" : "off") }
+            ))
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct ResetsTab: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        Form {
+            if model.snapshot.resets.isEmpty {
+                Text("No limit resets available")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.snapshot.resets) { grant in
+                    ResetRow(model: model, grant: grant)
+                }
+            }
+            Text("A weekly reset clears the week; a Fable reset gives back what Fable used. Reset asks before using one.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct ProtectionTab: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        let conf = model.snapshot.config
+        Form {
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Emergency stop")
+                        Text("Log out every Claude Code login found on this Mac. Every container using them needs /login again.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Button("Log out everywhere", role: .destructive) { model.emergencyStop() }
+                        .tint(.red)
+                }
+            }
+            Section {
+                Toggle("Auto stop when running out", isOn: Binding(
+                    get: { conf.autoStop },
+                    set: { model.set("auto-stop", $0 ? "on" : "off") }
+                ))
+                Text("The same logout, without asking, when at the current rate the weekly limit runs out more than a day early for 10 minutes in a row. At most once a week; a notification tells the result.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct GeneralTab: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        Form {
+            Toggle("Start at Login", isOn: Binding(
+                get: { model.startAtLogin },
+                set: { model.startAtLogin = $0 }
+            ))
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// The settings window, made with AppKit: a menu bar app has no app menu, and macOS
+// ignores the SwiftUI "show settings" action there. Native preferences tabs (an
+// NSTabViewController in toolbar style). One window, reused, opened in the middle of
+// the screen under the mouse.
+enum SettingsWindow {
+    private static var window: NSWindow?
+    private static let size = NSSize(width: 500, height: 280)
+
+    static func show(model: Model) {
+        // Close the menu bar panel the click came from.
+        NSApp.keyWindow?.close()
+
+        if window == nil {
+            let tabs = NSTabViewController()
+            tabs.tabStyle = .toolbar
+            tabs.addTabViewItem(item("Budget", "chart.bar", BudgetTab(model: model)))
+            tabs.addTabViewItem(item("Resets", "arrow.counterclockwise", ResetsTab(model: model)))
+            tabs.addTabViewItem(item("Protection", "exclamationmark.shield", ProtectionTab(model: model)))
+            tabs.addTabViewItem(item("General", "gearshape", GeneralTab(model: model)))
+
+            let made = NSWindow(contentViewController: tabs)
+            made.title = "ClaudeBar Settings"
+            made.styleMask = [.titled, .closable]
+            made.toolbarStyle = .preference
+            made.isReleasedWhenClosed = false
+            window = made
+        }
+        guard let window else { return }
+        window.setContentSize(size)
+        center(window)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private static func item<V: View>(_ title: String, _ symbol: String, _ view: V) -> NSTabViewItem {
+        let host = NSHostingController(rootView: view.frame(width: size.width, height: size.height))
+        host.preferredContentSize = size
+        let tab = NSTabViewItem(viewController: host)
+        tab.label = title
+        tab.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        return tab
+    }
+
+    // NSWindow.center() puts a window above the middle; this is the exact middle of the
+    // visible area of the screen with the mouse on it.
+    private static func center(_ window: NSWindow) {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        guard let area = screen?.visibleFrame else { return window.center() }
+        let frame = window.frame
+        window.setFrameOrigin(NSPoint(x: area.midX - frame.width / 2, y: area.midY - frame.height / 2))
     }
 }
 
@@ -291,7 +521,7 @@ struct Panel: View {
                 } else if !snap.week.has {
                     EmptyCard()
                 } else {
-                    Limits(snap: snap)
+                    Limits(snap: snap, model: model)
                 }
 
                 ForEach([snap.error, model.error ?? ""].filter { !$0.isEmpty }, id: \.self) { error in
@@ -334,7 +564,12 @@ struct Header: View {
                     .foregroundStyle(stale ? Color(nsColor: .systemRed) : Color.secondary)
             }
             Spacer()
-            if snap.level.alarming || (snap.week.has && snap.week.left <= 0) {
+            if snap.autoStopAt > 0 {
+                // Auto stop armed: counts down; it disarms itself if the rate drops.
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    StatusPill(level: .bad, label: "Auto stop in \(clock(snap.autoStopAt - Int64(context.date.timeIntervalSince1970)))")
+                }
+            } else if snap.level.alarming || (snap.week.has && snap.week.left <= 0) {
                 StatusPill(level: snap.level, label: snap.week.has && snap.week.left <= 0 ? "Limit reached" : snap.level.label)
             }
         }
@@ -358,6 +593,7 @@ struct StatusPill: View {
 
 struct Limits: View {
     var snap: Snapshot
+    @ObservedObject var model: Model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -372,21 +608,35 @@ struct Limits: View {
                             days: snap.days, color: snap.week.level.color)
                 // One line in % of the weekly limit; when the limit runs out early, the
                 // forecast under it in the level's color.
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(budgetLine)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text(rateLine)
-                        .font(.system(size: 12, weight: rateLevel.alarming ? .medium : .regular))
-                        .foregroundStyle(rateLevel.alarming ? rateLevel.textColor : Color.secondary)
+                if snap.week.left <= 0 {
+                    // Limit reached: a live countdown to the reset.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("Resets in \(clock(Int64(snap.week.resetsAt) - Int64(context.date.timeIntervalSince1970)))")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color(nsColor: .systemRed))
+                            .monospacedDigit()
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(budgetLine)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        // Only when the current rate runs out more than a day before the reset.
+                        if rateLevel == .bad {
+                            Text(rateLine)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(rateLevel.textColor)
+                        }
+                    }
+                    .monospacedDigit()
                 }
-                .monospacedDigit()
             }
 
             ForEach(snap.models) { model in
                 WeeklyLimit(title: "Weekly · \(model.name)", left: model.left, resetsAt: model.resetsAt,
                             days: model.days, color: .accentColor)
             }
+
 
             if snap.fiveHour.has {
                 LimitRow(title: "5-hour session", left: snap.fiveHour.left, resetsAt: snap.fiveHour.resetsAt,
@@ -509,6 +759,36 @@ struct DayCell: View {
         }
         .frame(maxWidth: .infinity)
         .help("\(percent(leftOfWeek)) of the week left of this day's \(percent(day.budget))" + (day.known ? " · \(percent(day.spent)) spent on this date" : ""))
+    }
+}
+
+// One limit reset with its button; using it asks for a confirmation first.
+struct ResetRow: View {
+    @ObservedObject var model: Model
+    var grant: ResetGrant
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(grant.type == "weekly" ? "Weekly reset" : "Fable reset")
+                Text("\(grant.resetsLeft) left · expires \(expiry(grant.endsAt))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Reset") { model.reset(grant) }
+                .disabled(!grant.usableNow || model.resetting)
+        }
+        .help(grant.label)
+    }
+
+    private func expiry(_ iso: String) -> String {
+        let parser = ISO8601DateFormatter()
+        guard let date = parser.date(from: iso) else { return iso }
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_GB")
+        fmt.dateFormat = "d MMM"
+        return fmt.string(from: date)
     }
 }
 
@@ -642,17 +922,9 @@ struct Actions: View {
     var updatedAt: Int64
 
     var body: some View {
-        let conf = model.snapshot.config
-
         VStack(spacing: 0) {
-            MenuRow(icon: "clock", title: "Pace by hours", checked: !conf.byDays) { model.set("pace", "hours") }
-            MenuRow(icon: "calendar", title: "Pace by days", checked: conf.byDays) { model.set("pace", "days") }
-            MenuRow(icon: "moon.zzz", title: "Quiet nights 00–09", checked: conf.night) {
-                model.set("night", conf.night ? "off" : "on")
-            }
-            Divider().padding(.vertical, 6).padding(.horizontal, 8)
             MenuRow(icon: "arrow.clockwise", title: "Refresh") { model.refresh() }
-            MenuRow(icon: "power", title: "Start at Login", checked: model.startAtLogin) { model.startAtLogin.toggle() }
+            MenuRow(icon: "gearshape", title: "Settings…") { SettingsWindow.show(model: model) }
             Divider().padding(.vertical, 6).padding(.horizontal, 8)
             MenuRow(icon: "globe", title: "ClaudeBar by egorsky.com") {
                 if let url = URL(string: "https://egorsky.com") { NSWorkspace.shared.open(url) }
@@ -666,6 +938,7 @@ struct Actions: View {
 struct MenuRow: View {
     var icon: String
     var title: String
+    var tint: Color? = nil
     var checked = false
     var action: () -> Void
     @State private var hover = false
@@ -675,9 +948,11 @@ struct MenuRow: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(tint ?? .secondary)
                     .frame(width: 18)
-                Text(title).font(.system(size: 14))
+                Text(title)
+                    .font(.system(size: 14))
+                    .foregroundStyle(tint ?? .primary)
                 Spacer()
                 if checked {
                     Image(systemName: "checkmark")
@@ -721,6 +996,14 @@ func short(_ epoch: Int64) -> String {
     if secs >= 86400 { return "\(secs / 86400)d" }
     if secs >= 3600 { return "\(secs / 3600)h" }
     return "\(max(1, secs / 60))m"
+}
+
+// "2d 04:15:09", "2:54:10".
+func clock(_ secs: Int64) -> String {
+    let s = max(0, secs)
+    let days = s / 86400
+    let time = String(format: "%d:%02d:%02d", s % 86400 / 3600, s % 3600 / 60, s % 60)
+    return days > 0 ? "\(days)d \(time)" : time
 }
 
 func ago(_ epoch: Int64) -> String {
